@@ -409,6 +409,56 @@ class GitOperations:
             pass
         return 0
 
+    def get_status_porcelain(
+        self,
+    ) -> dict:
+        """Get branch, ahead/behind, staged/unstaged/untracked counts in one command.
+
+        Uses 'git status --porcelain=v2 --branch' to minimize subprocess calls.
+        Returns a dict with keys: branch, remote_branch, ahead, behind,
+        staged_count, unstaged_count, untracked_count.
+        """
+        info: dict = {
+            "branch": "",
+            "remote_branch": "",
+            "ahead": 0,
+            "behind": 0,
+            "staged_count": 0,
+            "unstaged_count": 0,
+            "untracked_count": 0,
+        }
+        try:
+            result = self._run("status", "--porcelain=v2", "--branch", check=False)
+            if result.returncode != 0:
+                return info
+            for line in result.stdout.splitlines():
+                if line.startswith("# branch.head "):
+                    info["branch"] = line[len("# branch.head ") :]
+                elif line.startswith("# branch.upstream "):
+                    info["remote_branch"] = line[len("# branch.upstream ") :]
+                elif line.startswith("# branch.ab "):
+                    # Format: # branch.ab +<ahead> -<behind>
+                    parts = line.split()
+                    if len(parts) == 3:
+                        info["ahead"] = abs(int(parts[1]))
+                        info["behind"] = abs(int(parts[2]))
+                elif line.startswith("1 ") or line.startswith("2 "):
+                    # Changed entry: XY sub mH mI mW hH hI path
+                    xy = line[2:4]
+                    if xy[0] != ".":
+                        info["staged_count"] += 1
+                    if xy[1] != ".":
+                        info["unstaged_count"] += 1
+                elif line.startswith("u "):
+                    # Unmerged entry: counts as both staged and unstaged
+                    info["staged_count"] += 1
+                    info["unstaged_count"] += 1
+                elif line.startswith("? "):
+                    info["untracked_count"] += 1
+        except Exception:
+            pass
+        return info
+
     def get_staged_files(self) -> list[tuple[str, str]]:
         """Get staged files with their status."""
         try:
@@ -697,32 +747,31 @@ class GitRepository:
                     status.error_message = f"Fetch failed: {error}"
                     return status
 
-            status.branch = self.ops.get_current_branch()
-            status.remote_branch = self.ops.get_remote_branch()
+            info = self.ops.get_status_porcelain()
+            status.branch = info["branch"]
+            status.remote_branch = info["remote_branch"]
+            status.ahead_count = info["ahead"]
+            status.behind_count = info["behind"]
+            status.staged_count = info["staged_count"]
+            status.unstaged_count = info["unstaged_count"]
+            status.untracked_count = info["untracked_count"]
 
             if status.remote_branch:
-                ahead, behind = self.ops.get_ahead_behind()
-                status.ahead_count = ahead
-                status.behind_count = behind
-
-                if ahead > 0 and behind > 0:
+                if status.ahead_count > 0 and status.behind_count > 0:
                     status.sync_status = SyncStatus.DIVERGED
-                elif ahead > 0:
+                elif status.ahead_count > 0:
                     status.sync_status = SyncStatus.AHEAD
-                elif behind > 0:
+                elif status.behind_count > 0:
                     status.sync_status = SyncStatus.BEHIND
                 else:
                     status.sync_status = SyncStatus.CLEAN
-            elif self.ops.is_detached():
+            elif status.branch == "(detached)":
                 status.sync_status = SyncStatus.DETACHED
             elif self.ops.has_remotes():
                 status.sync_status = SyncStatus.NO_UPSTREAM
             else:
                 status.sync_status = SyncStatus.NO_REMOTE
 
-            status.staged_count = self.ops.get_staged_count()
-            status.unstaged_count = self.ops.get_unstaged_count()
-            status.untracked_count = self.ops.get_untracked_count()
             status.last_commit_date = self.ops.get_last_commit_date()
 
         except Exception as e:
@@ -904,12 +953,14 @@ class FleetManager:
         sequential: bool = False,
         dry_run: bool = False,
         mode: PullMode = PullMode.SMART,
+        statuses: list[RepositoryStatus] | None = None,
     ) -> list[OperationResult]:
         """Pull all repositories that need pulling."""
         repos = self.discover_repositories()
 
         if only_behind:
-            statuses = self.get_all_status(fetch_first=True, sequential=sequential)
+            if statuses is None:
+                statuses = self.get_all_status(fetch_first=True, sequential=sequential)
             if mode == PullMode.FORCE:
                 repos_to_pull = [repo for repo, status in zip(repos, statuses) if status.needs_pull]
             elif mode == PullMode.SAFE:
@@ -970,12 +1021,14 @@ class FleetManager:
         only_ahead: bool = True,
         sequential: bool = False,
         dry_run: bool = False,
+        statuses: list[RepositoryStatus] | None = None,
     ) -> list[OperationResult]:
         """Push all repositories that need pushing."""
         repos = self.discover_repositories()
 
         if only_ahead:
-            statuses = self.get_all_status(fetch_first=True, sequential=sequential)
+            if statuses is None:
+                statuses = self.get_all_status(fetch_first=True, sequential=sequential)
             repos_to_push = [repo for repo, status in zip(repos, statuses) if status.needs_push]
         else:
             repos_to_push = repos
@@ -1209,8 +1262,13 @@ class MultiRootFleetManager:
         sequential: bool = False,
         dry_run: bool = False,
         mode: PullMode = PullMode.SMART,
+        all_statuses: list[tuple[Path, list[RepositoryStatus]]] | None = None,
     ) -> list[tuple[Path, list[OperationResult]]]:
         """Pull all repositories across all roots."""
+        statuses_by_root: dict[Path, list[RepositoryStatus]] = {}
+        if all_statuses is not None:
+            statuses_by_root = {root: statuses for root, statuses in all_statuses}
+
         results = []
         for root, fleet in self._fleet_managers.items():
             pull_results = fleet.pull_all(
@@ -1218,18 +1276,30 @@ class MultiRootFleetManager:
                 sequential=sequential,
                 dry_run=dry_run,
                 mode=mode,
+                statuses=statuses_by_root.get(root),
             )
             results.append((root, pull_results))
         return results
 
     def push_all(
-        self, only_ahead: bool = True, sequential: bool = False, dry_run: bool = False
+        self,
+        only_ahead: bool = True,
+        sequential: bool = False,
+        dry_run: bool = False,
+        all_statuses: list[tuple[Path, list[RepositoryStatus]]] | None = None,
     ) -> list[tuple[Path, list[OperationResult]]]:
         """Push all repositories across all roots."""
+        statuses_by_root: dict[Path, list[RepositoryStatus]] = {}
+        if all_statuses is not None:
+            statuses_by_root = {root: statuses for root, statuses in all_statuses}
+
         results = []
         for root, fleet in self._fleet_managers.items():
             push_results = fleet.push_all(
-                only_ahead=only_ahead, sequential=sequential, dry_run=dry_run
+                only_ahead=only_ahead,
+                sequential=sequential,
+                dry_run=dry_run,
+                statuses=statuses_by_root.get(root),
             )
             results.append((root, push_results))
         return results
@@ -1878,7 +1948,10 @@ def sync(
             success = sum(sum(1 for r in results if r.success) for _, results in fetch_results)
             console.print(f"  Fetched {success}/{total} repositories\n")
 
-        # Step 2: Pull (smart)
+        # Get status once after fetch (no re-fetch needed)
+        pre_statuses = multi_fleet.get_all_status(fetch_first=False, sequential=sequential)
+
+        # Step 2: Pull (smart) - reuse pre-fetched statuses
         if not json_output:
             console.print("[bold]Step 2/4: Pulling repositories (smart)...[/]")
 
@@ -1886,6 +1959,7 @@ def sync(
             only_behind=True,
             sequential=sequential,
             dry_run=dry_run,
+            all_statuses=pre_statuses,
         )
         all_results["pull"] = pull_results
 
@@ -1897,7 +1971,10 @@ def sync(
             else:
                 console.print("  No repositories needed pulling\n")
 
-        # Step 3: Push
+        # Re-check status after pull (no fetch needed, pull changed ahead/behind)
+        post_pull_statuses = multi_fleet.get_all_status(fetch_first=False, sequential=sequential)
+
+        # Step 3: Push - reuse post-pull statuses
         if not json_output:
             console.print("[bold]Step 3/4: Pushing repositories...[/]")
 
@@ -1905,6 +1982,7 @@ def sync(
             only_ahead=True,
             sequential=sequential,
             dry_run=dry_run,
+            all_statuses=post_pull_statuses,
         )
         all_results["push"] = push_results
 
@@ -1980,7 +2058,10 @@ def sync(
         success = sum(1 for r in fetch_results if r.success)
         console.print(f"  Fetched {success}/{len(fetch_results)} repositories\n")
 
-    # Step 2: Pull (smart)
+    # Get status once after fetch (no re-fetch needed)
+    pre_statuses = fleet.get_all_status(fetch_first=False, sequential=sequential)
+
+    # Step 2: Pull (smart) - reuse pre-fetched statuses
     if not json_output:
         console.print("[bold]Step 2/4: Pulling repositories (smart)...[/]")
 
@@ -1988,6 +2069,7 @@ def sync(
         only_behind=True,
         sequential=sequential,
         dry_run=dry_run,
+        statuses=pre_statuses,
     )
     all_results.extend(pull_results)
 
@@ -1998,7 +2080,10 @@ def sync(
         else:
             console.print("  No repositories needed pulling\n")
 
-    # Step 3: Push
+    # Re-check status after pull (no fetch needed, pull changed ahead/behind)
+    post_pull_statuses = fleet.get_all_status(fetch_first=False, sequential=sequential)
+
+    # Step 3: Push - reuse post-pull statuses
     if not json_output:
         console.print("[bold]Step 3/4: Pushing repositories...[/]")
 
@@ -2006,6 +2091,7 @@ def sync(
         only_ahead=True,
         sequential=sequential,
         dry_run=dry_run,
+        statuses=post_pull_statuses,
     )
     all_results.extend(push_results)
 
