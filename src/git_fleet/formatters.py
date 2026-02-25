@@ -184,7 +184,7 @@ class OutputFormatter:
         table = Table(title=f"Fleet Status: {root_path}")
 
         table.add_column("Repository", style="cyan", no_wrap=True)
-        table.add_column("Branch", style="blue")
+        table.add_column("Branch")
         table.add_column("Sync", justify="center")
         table.add_column("Working Tree", justify="center")
         table.add_column("Last Commit", justify="right")
@@ -205,11 +205,19 @@ class OutputFormatter:
             if status.has_conflict_risk:
                 repo_display = f"[bold red]⚠ {repo_display}[/]"
 
-            table.add_row(repo_display, status.branch, sync_icon, wt_status, last_commit)
+            branch_display = self._get_branch_display(status)
+
+            table.add_row(repo_display, branch_display, sync_icon, wt_status, last_commit)
 
         self.console.print(table)
         self.console.print()
         self._print_summary_table(summary, sync_summary)
+
+    def _get_branch_display(self, status: RepositoryStatus) -> str:
+        """Get branch name with color based on default branch."""
+        if status.branch == status.default_branch:
+            return f"[blue]{status.branch}[/]"
+        return f"[green]{status.branch}[/]"
 
     def _get_sync_icon(self, status: RepositoryStatus) -> str:
         """Get sync status icon."""
@@ -686,7 +694,7 @@ class OutputFormatter:
 
         table.add_column("Root", style="yellow", no_wrap=True)
         table.add_column("Repository", style="cyan", no_wrap=True)
-        table.add_column("Branch", style="blue")
+        table.add_column("Branch")
         table.add_column("Sync", justify="center")
         table.add_column("Working Tree", justify="center")
         table.add_column("Last Commit", justify="right")
@@ -702,8 +710,10 @@ class OutputFormatter:
                 if status.has_conflict_risk:
                     repo_display = f"[bold red]⚠ {repo_display}[/]"
 
+                branch_display = self._get_branch_display(status)
+
                 table.add_row(
-                    root_name, repo_display, status.branch, sync_icon, wt_status, last_commit
+                    root_name, repo_display, branch_display, sync_icon, wt_status, last_commit
                 )
 
         self.console.print(table)

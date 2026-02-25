@@ -74,6 +74,7 @@ class RepositoryStatus:
     unstaged_count: int = 0
     untracked_count: int = 0
     last_commit_date: datetime | None = None
+    default_branch: str = ""
     error_message: str = ""
 
     @property
@@ -408,6 +409,29 @@ class GitOperations:
         except Exception:
             pass
         return 0
+
+    def get_default_branch(self) -> str:
+        """Get the default branch name from origin/HEAD.
+
+        Falls back to 'main' or 'master' if origin/HEAD is not set.
+        """
+        try:
+            result = self._run("symbolic-ref", "refs/remotes/origin/HEAD", check=False)
+            if result.returncode == 0:
+                # Output: refs/remotes/origin/main -> extract "main"
+                ref = result.stdout.strip()
+                return ref.rsplit("/", 1)[-1]
+        except Exception:
+            pass
+        # Fallback: check if main or master exists
+        for name in ("main", "master"):
+            try:
+                result = self._run("rev-parse", "--verify", f"refs/heads/{name}", check=False)
+                if result.returncode == 0:
+                    return name
+            except Exception:
+                pass
+        return ""
 
     def get_status_porcelain(
         self,
@@ -773,6 +797,7 @@ class GitRepository:
                 status.sync_status = SyncStatus.NO_REMOTE
 
             status.last_commit_date = self.ops.get_last_commit_date()
+            status.default_branch = self.ops.get_default_branch()
 
         except Exception as e:
             status.sync_status = SyncStatus.ERROR
