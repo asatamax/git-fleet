@@ -463,9 +463,9 @@ class GitOperations:
                 elif line.startswith("# branch.ab "):
                     # Format: # branch.ab +<ahead> -<behind>
                     parts = line.split()
-                    if len(parts) == 3:
-                        info["ahead"] = abs(int(parts[1]))
-                        info["behind"] = abs(int(parts[2]))
+                    if len(parts) == 4:
+                        info["ahead"] = abs(int(parts[2]))
+                        info["behind"] = abs(int(parts[3]))
                 elif line.startswith("1 ") or line.startswith("2 "):
                     # Changed entry: XY sub mH mI mW hH hI path
                     xy = line[2:4]
