@@ -1971,7 +1971,12 @@ def sync(
         if not json_output:
             total = sum(len(results) for _, results in fetch_results)
             success = sum(sum(1 for r in results if r.success) for _, results in fetch_results)
-            console.print(f"  Fetched {success}/{total} repositories\n")
+            console.print(f"  Fetched {success}/{total} repositories")
+            failed = [r for _, results in fetch_results for r in results if not r.success]
+            if failed:
+                for r in failed:
+                    console.print(f"    [red]✗ {r.name}: {r.error}[/]")
+            console.print()
 
         # Get status once after fetch (no re-fetch needed)
         pre_statuses = multi_fleet.get_all_status(fetch_first=False, sequential=sequential)
@@ -1992,7 +1997,12 @@ def sync(
             total = sum(len(results) for _, results in pull_results)
             if total > 0:
                 success = sum(sum(1 for r in results if r.success) for _, results in pull_results)
-                console.print(f"  Pulled {success}/{total} repositories\n")
+                console.print(f"  Pulled {success}/{total} repositories")
+                failed = [r for _, results in pull_results for r in results if not r.success]
+                if failed:
+                    for r in failed:
+                        console.print(f"    [red]✗ {r.name}: {r.error}[/]")
+                console.print()
             else:
                 console.print("  No repositories needed pulling\n")
 
@@ -2015,7 +2025,12 @@ def sync(
             total = sum(len(results) for _, results in push_results)
             if total > 0:
                 success = sum(sum(1 for r in results if r.success) for _, results in push_results)
-                console.print(f"  Pushed {success}/{total} repositories\n")
+                console.print(f"  Pushed {success}/{total} repositories")
+                failed = [r for _, results in push_results for r in results if not r.success]
+                if failed:
+                    for r in failed:
+                        console.print(f"    [red]✗ {r.name}: {r.error}[/]")
+                console.print()
             else:
                 console.print("  No repositories needed pushing\n")
 
@@ -2081,7 +2096,12 @@ def sync(
 
     if not json_output:
         success = sum(1 for r in fetch_results if r.success)
-        console.print(f"  Fetched {success}/{len(fetch_results)} repositories\n")
+        console.print(f"  Fetched {success}/{len(fetch_results)} repositories")
+        failed = [r for r in fetch_results if not r.success]
+        if failed:
+            for r in failed:
+                console.print(f"    [red]✗ {r.name}: {r.error}[/]")
+        console.print()
 
     # Get status once after fetch (no re-fetch needed)
     pre_statuses = fleet.get_all_status(fetch_first=False, sequential=sequential)
@@ -2101,7 +2121,12 @@ def sync(
     if not json_output:
         if pull_results:
             success = sum(1 for r in pull_results if r.success)
-            console.print(f"  Pulled {success}/{len(pull_results)} repositories\n")
+            console.print(f"  Pulled {success}/{len(pull_results)} repositories")
+            failed = [r for r in pull_results if not r.success]
+            if failed:
+                for r in failed:
+                    console.print(f"    [red]✗ {r.name}: {r.error}[/]")
+            console.print()
         else:
             console.print("  No repositories needed pulling\n")
 
@@ -2123,7 +2148,12 @@ def sync(
     if not json_output:
         if push_results:
             success = sum(1 for r in push_results if r.success)
-            console.print(f"  Pushed {success}/{len(push_results)} repositories\n")
+            console.print(f"  Pushed {success}/{len(push_results)} repositories")
+            failed = [r for r in push_results if not r.success]
+            if failed:
+                for r in failed:
+                    console.print(f"    [red]✗ {r.name}: {r.error}[/]")
+            console.print()
         else:
             console.print("  No repositories needed pushing\n")
 
