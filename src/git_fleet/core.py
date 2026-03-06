@@ -20,7 +20,13 @@ from typing import Any
 
 import typer
 from rich.console import Console
-from rich.progress import Progress, SpinnerColumn, TextColumn
+from rich.progress import (
+    BarColumn,
+    MofNCompleteColumn,
+    Progress,
+    SpinnerColumn,
+    TextColumn,
+)
 
 from ._version import __version__
 from .formatters import OutputFormatter
@@ -936,6 +942,7 @@ class FleetManager:
         operation: Callable[[GitRepository], Any],
         repos: list[GitRepository] | None = None,
         sequential: bool = False,
+        on_repo_done: Callable[[], None] | None = None,
     ) -> list:
         """Execute operation on repositories in parallel or sequentially."""
         if repos is None:
@@ -946,30 +953,43 @@ class FleetManager:
         if sequential or len(repos) <= 1:
             for repo in repos:
                 results.append(operation(repo))
+                if on_repo_done:
+                    on_repo_done()
         else:
             with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
                 futures = {executor.submit(operation, repo): repo for repo in repos}
                 for future in as_completed(futures):
                     results.append(future.result())
+                    if on_repo_done:
+                        on_repo_done()
 
         # Sort by path for consistent ordering
         results.sort(key=lambda r: r.path if hasattr(r, "path") else str(r))
         return results
 
     def get_all_status(
-        self, fetch_first: bool = True, sequential: bool = False
+        self,
+        fetch_first: bool = True,
+        sequential: bool = False,
+        on_repo_done: Callable[[], None] | None = None,
     ) -> list[RepositoryStatus]:
         """Get status of all repositories."""
         return self._execute_parallel(
             lambda repo: repo.get_status(fetch_first=fetch_first),
             sequential=sequential,
+            on_repo_done=on_repo_done,
         )
 
-    def fetch_all(self, sequential: bool = False) -> list[OperationResult]:
+    def fetch_all(
+        self,
+        sequential: bool = False,
+        on_repo_done: Callable[[], None] | None = None,
+    ) -> list[OperationResult]:
         """Fetch all repositories."""
         return self._execute_parallel(
             lambda repo: repo.fetch(),
             sequential=sequential,
+            on_repo_done=on_repo_done,
         )
 
     def pull_all(
@@ -1102,27 +1122,41 @@ class FleetManager:
 
         return summary
 
-    def get_all_identities(self, sequential: bool = False) -> list[RepositoryIdentity]:
+    def get_all_identities(
+        self,
+        sequential: bool = False,
+        on_repo_done: Callable[[], None] | None = None,
+    ) -> list[RepositoryIdentity]:
         """Get identity configuration for all repositories."""
         return self._execute_parallel(
             lambda repo: repo.get_identity(),
             sequential=sequential,
+            on_repo_done=on_repo_done,
         )
 
-    def get_all_remotes(self, sequential: bool = False) -> list[RepositoryRemotes]:
+    def get_all_remotes(
+        self,
+        sequential: bool = False,
+        on_repo_done: Callable[[], None] | None = None,
+    ) -> list[RepositoryRemotes]:
         """Get remote configuration for all repositories."""
         return self._execute_parallel(
             lambda repo: repo.get_remotes(),
             sequential=sequential,
+            on_repo_done=on_repo_done,
         )
 
     def get_all_diff(
-        self, sequential: bool = False, dirty_only: bool = True
+        self,
+        sequential: bool = False,
+        dirty_only: bool = True,
+        on_repo_done: Callable[[], None] | None = None,
     ) -> list[RepositoryDiff]:
         """Get file-level diff for all repositories."""
         results = self._execute_parallel(
             lambda repo: repo.get_diff(),
             sequential=sequential,
+            on_repo_done=on_repo_done,
         )
         if dirty_only:
             results = [r for r in results if r.is_dirty]
@@ -1226,42 +1260,56 @@ class MultiRootFleetManager:
         }
 
     def get_all_identities(
-        self, sequential: bool = False
+        self,
+        sequential: bool = False,
+        on_repo_done: Callable[[], None] | None = None,
     ) -> list[tuple[Path, list[RepositoryIdentity]]]:
         """Get identity configuration for all repositories across all roots."""
         results = []
         for root, fleet in self._fleet_managers.items():
-            identities = fleet.get_all_identities(sequential=sequential)
+            identities = fleet.get_all_identities(sequential=sequential, on_repo_done=on_repo_done)
             results.append((root, identities))
         return results
 
     def get_all_remotes(
-        self, sequential: bool = False
+        self,
+        sequential: bool = False,
+        on_repo_done: Callable[[], None] | None = None,
     ) -> list[tuple[Path, list[RepositoryRemotes]]]:
         """Get remote configuration for all repositories across all roots."""
         results = []
         for root, fleet in self._fleet_managers.items():
-            remotes = fleet.get_all_remotes(sequential=sequential)
+            remotes = fleet.get_all_remotes(sequential=sequential, on_repo_done=on_repo_done)
             results.append((root, remotes))
         return results
 
     def get_all_diff(
-        self, sequential: bool = False, dirty_only: bool = True
+        self,
+        sequential: bool = False,
+        dirty_only: bool = True,
+        on_repo_done: Callable[[], None] | None = None,
     ) -> list[tuple[Path, list[RepositoryDiff]]]:
         """Get file-level diff for all repositories across all roots."""
         results = []
         for root, fleet in self._fleet_managers.items():
-            diffs = fleet.get_all_diff(sequential=sequential, dirty_only=dirty_only)
+            diffs = fleet.get_all_diff(
+                sequential=sequential, dirty_only=dirty_only, on_repo_done=on_repo_done
+            )
             results.append((root, diffs))
         return results
 
     def get_all_status(
-        self, fetch_first: bool = True, sequential: bool = False
+        self,
+        fetch_first: bool = True,
+        sequential: bool = False,
+        on_repo_done: Callable[[], None] | None = None,
     ) -> list[tuple[Path, list[RepositoryStatus]]]:
         """Get status for all repositories across all roots."""
         results = []
         for root, fleet in self._fleet_managers.items():
-            statuses = fleet.get_all_status(fetch_first=fetch_first, sequential=sequential)
+            statuses = fleet.get_all_status(
+                fetch_first=fetch_first, sequential=sequential, on_repo_done=on_repo_done
+            )
             results.append((root, statuses))
         return results
 
@@ -1273,11 +1321,15 @@ class MultiRootFleetManager:
             results.append((root, repos))
         return results
 
-    def fetch_all(self, sequential: bool = False) -> list[tuple[Path, list[OperationResult]]]:
+    def fetch_all(
+        self,
+        sequential: bool = False,
+        on_repo_done: Callable[[], None] | None = None,
+    ) -> list[tuple[Path, list[OperationResult]]]:
         """Fetch all repositories across all roots."""
         results = []
         for root, fleet in self._fleet_managers.items():
-            fetch_results = fleet.fetch_all(sequential=sequential)
+            fetch_results = fleet.fetch_all(sequential=sequential, on_repo_done=on_repo_done)
             results.append((root, fetch_results))
         return results
 
@@ -1413,6 +1465,17 @@ def get_console_and_formatter(json_output: bool) -> tuple[Console, OutputFormatt
     return console, formatter
 
 
+def _create_progress_bar(console: Console) -> Progress:
+    """Create a progress bar with bar, count, and percentage columns."""
+    return Progress(
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+        console=console,
+    )
+
+
 @app.command()
 def status(
     path: Path = typer.Argument(
@@ -1471,17 +1534,15 @@ def status(
         )
 
         if not json_output:
-            with Progress(
-                SpinnerColumn(),
-                TextColumn("[progress.description]{task.description}"),
-                console=console,
-            ) as progress:
-                progress.add_task(
-                    "Fetching and analyzing..." if not no_fetch else "Analyzing...",
-                    total=None,
-                )
+            all_repos = multi_fleet.discover_all_repositories()
+            total = sum(len(repos) for _, repos in all_repos)
+            desc = "Fetching and analyzing..." if not no_fetch else "Analyzing..."
+            with _create_progress_bar(console) as progress:
+                task = progress.add_task(desc, total=total)
                 all_statuses = multi_fleet.get_all_status(
-                    fetch_first=not no_fetch, sequential=sequential
+                    fetch_first=not no_fetch,
+                    sequential=sequential,
+                    on_repo_done=lambda: progress.advance(task),
                 )
         else:
             all_statuses = multi_fleet.get_all_status(
@@ -1510,18 +1571,13 @@ def status(
 
             console.print(f"Found [bold]{len(repos)}[/] repositories\n")
 
-            with Progress(
-                SpinnerColumn(),
-                TextColumn("[progress.description]{task.description}"),
-                console=console,
-            ) as progress:
-                progress.add_task(
-                    "Fetching and analyzing..." if not no_fetch else "Analyzing...",
-                    total=None,
-                )
+            desc = "Fetching and analyzing..." if not no_fetch else "Analyzing..."
+            with _create_progress_bar(console) as progress:
+                task = progress.add_task(desc, total=len(repos))
                 statuses = fleet.get_all_status(
                     fetch_first=not no_fetch,
                     sequential=sequential,
+                    on_repo_done=lambda: progress.advance(task),
                 )
         else:
             repos = fleet.discover_repositories()
@@ -1587,13 +1643,14 @@ def fetch(
         )
 
         if not json_output:
-            with Progress(
-                SpinnerColumn(),
-                TextColumn("[progress.description]{task.description}"),
-                console=console,
-            ) as progress:
-                progress.add_task("Fetching all repositories...", total=None)
-                all_results = multi_fleet.fetch_all(sequential=sequential)
+            all_repos = multi_fleet.discover_all_repositories()
+            total = sum(len(repos) for _, repos in all_repos)
+            with _create_progress_bar(console) as progress:
+                task = progress.add_task("Fetching...", total=total)
+                all_results = multi_fleet.fetch_all(
+                    sequential=sequential,
+                    on_repo_done=lambda: progress.advance(task),
+                )
         else:
             all_results = multi_fleet.fetch_all(sequential=sequential)
 
@@ -1608,13 +1665,13 @@ def fetch(
         )
 
         if not json_output:
-            with Progress(
-                SpinnerColumn(),
-                TextColumn("[progress.description]{task.description}"),
-                console=console,
-            ) as progress:
-                progress.add_task("Fetching all repositories...", total=None)
-                results = fleet.fetch_all(sequential=sequential)
+            repos = fleet.discover_repositories()
+            with _create_progress_bar(console) as progress:
+                task = progress.add_task("Fetching...", total=len(repos))
+                results = fleet.fetch_all(
+                    sequential=sequential,
+                    on_repo_done=lambda: progress.advance(task),
+                )
         else:
             results = fleet.fetch_all(sequential=sequential)
 
@@ -1960,12 +2017,20 @@ def sync(
             include_detached=include_detached,
         )
         all_results = {"fetch": [], "pull": [], "push": []}
+        all_repos = multi_fleet.discover_all_repositories()
+        repo_total = sum(len(repos) for _, repos in all_repos)
 
         # Step 1: Fetch
         if not json_output:
             console.print("[bold]Step 1/4: Fetching all repositories...[/]")
-
-        fetch_results = multi_fleet.fetch_all(sequential=sequential)
+            with _create_progress_bar(console) as progress:
+                task = progress.add_task("  Fetching...", total=repo_total)
+                fetch_results = multi_fleet.fetch_all(
+                    sequential=sequential,
+                    on_repo_done=lambda: progress.advance(task),
+                )
+        else:
+            fetch_results = multi_fleet.fetch_all(sequential=sequential)
         all_results["fetch"] = fetch_results
 
         if not json_output:
@@ -1979,7 +2044,16 @@ def sync(
             console.print()
 
         # Get status once after fetch (no re-fetch needed)
-        pre_statuses = multi_fleet.get_all_status(fetch_first=False, sequential=sequential)
+        if not json_output:
+            with _create_progress_bar(console) as progress:
+                task = progress.add_task("  Analyzing...", total=repo_total)
+                pre_statuses = multi_fleet.get_all_status(
+                    fetch_first=False,
+                    sequential=sequential,
+                    on_repo_done=lambda: progress.advance(task),
+                )
+        else:
+            pre_statuses = multi_fleet.get_all_status(fetch_first=False, sequential=sequential)
 
         # Step 2: Pull (smart) - reuse pre-fetched statuses
         if not json_output:
@@ -2007,7 +2081,18 @@ def sync(
                 console.print("  No repositories needed pulling\n")
 
         # Re-check status after pull (no fetch needed, pull changed ahead/behind)
-        post_pull_statuses = multi_fleet.get_all_status(fetch_first=False, sequential=sequential)
+        if not json_output:
+            with _create_progress_bar(console) as progress:
+                task = progress.add_task("  Analyzing...", total=repo_total)
+                post_pull_statuses = multi_fleet.get_all_status(
+                    fetch_first=False,
+                    sequential=sequential,
+                    on_repo_done=lambda: progress.advance(task),
+                )
+        else:
+            post_pull_statuses = multi_fleet.get_all_status(
+                fetch_first=False, sequential=sequential
+            )
 
         # Step 3: Push - reuse post-pull statuses
         if not json_output:
@@ -2035,8 +2120,15 @@ def sync(
                 console.print("  No repositories needed pushing\n")
 
             # Step 4: Final status check
-            console.print("[bold]Step 4/4: Checking final status...[/]\n")
-            all_statuses = multi_fleet.get_all_status(fetch_first=False, sequential=sequential)
+            console.print("[bold]Step 4/4: Checking final status...[/]")
+            with _create_progress_bar(console) as progress:
+                task = progress.add_task("  Checking...", total=repo_total)
+                all_statuses = multi_fleet.get_all_status(
+                    fetch_first=False,
+                    sequential=sequential,
+                    on_repo_done=lambda: progress.advance(task),
+                )
+            console.print()
             summary = multi_fleet.get_summary(all_statuses)
             sync_summary = SyncOperationSummary.from_multi_root_results(
                 fetch_results, pull_results, push_results
@@ -2086,12 +2178,20 @@ def sync(
     )
 
     all_results = []
+    repos = fleet.discover_repositories()
+    repo_total = len(repos)
 
     # Step 1: Fetch
     if not json_output:
         console.print("[bold]Step 1/4: Fetching all repositories...[/]")
-
-    fetch_results = fleet.fetch_all(sequential=sequential)
+        with _create_progress_bar(console) as progress:
+            task = progress.add_task("  Fetching...", total=repo_total)
+            fetch_results = fleet.fetch_all(
+                sequential=sequential,
+                on_repo_done=lambda: progress.advance(task),
+            )
+    else:
+        fetch_results = fleet.fetch_all(sequential=sequential)
     all_results.extend(fetch_results)
 
     if not json_output:
@@ -2104,7 +2204,16 @@ def sync(
         console.print()
 
     # Get status once after fetch (no re-fetch needed)
-    pre_statuses = fleet.get_all_status(fetch_first=False, sequential=sequential)
+    if not json_output:
+        with _create_progress_bar(console) as progress:
+            task = progress.add_task("  Analyzing...", total=repo_total)
+            pre_statuses = fleet.get_all_status(
+                fetch_first=False,
+                sequential=sequential,
+                on_repo_done=lambda: progress.advance(task),
+            )
+    else:
+        pre_statuses = fleet.get_all_status(fetch_first=False, sequential=sequential)
 
     # Step 2: Pull (smart) - reuse pre-fetched statuses
     if not json_output:
@@ -2131,7 +2240,16 @@ def sync(
             console.print("  No repositories needed pulling\n")
 
     # Re-check status after pull (no fetch needed, pull changed ahead/behind)
-    post_pull_statuses = fleet.get_all_status(fetch_first=False, sequential=sequential)
+    if not json_output:
+        with _create_progress_bar(console) as progress:
+            task = progress.add_task("  Analyzing...", total=repo_total)
+            post_pull_statuses = fleet.get_all_status(
+                fetch_first=False,
+                sequential=sequential,
+                on_repo_done=lambda: progress.advance(task),
+            )
+    else:
+        post_pull_statuses = fleet.get_all_status(fetch_first=False, sequential=sequential)
 
     # Step 3: Push - reuse post-pull statuses
     if not json_output:
@@ -2158,8 +2276,15 @@ def sync(
             console.print("  No repositories needed pushing\n")
 
         # Step 4: Final status check
-        console.print("[bold]Step 4/4: Checking final status...[/]\n")
-        statuses = fleet.get_all_status(fetch_first=False, sequential=sequential)
+        console.print("[bold]Step 4/4: Checking final status...[/]")
+        with _create_progress_bar(console) as progress:
+            task = progress.add_task("  Checking...", total=repo_total)
+            statuses = fleet.get_all_status(
+                fetch_first=False,
+                sequential=sequential,
+                on_repo_done=lambda: progress.advance(task),
+            )
+        console.print()
         summary = fleet.get_summary(statuses)
         sync_summary = SyncOperationSummary.from_results(fetch_results, pull_results, push_results)
         formatter.print_status_list(statuses, summary, target_path.resolve(), sync_summary)
@@ -2293,13 +2418,14 @@ def who(
         multi_fleet = MultiRootFleetManager(root_paths)
 
         if not json_output:
-            with Progress(
-                SpinnerColumn(),
-                TextColumn("[progress.description]{task.description}"),
-                console=console,
-            ) as progress:
-                progress.add_task("Scanning repositories...", total=None)
-                all_identities = multi_fleet.get_all_identities(sequential=sequential)
+            all_repos = multi_fleet.discover_all_repositories()
+            total = sum(len(repos) for _, repos in all_repos)
+            with _create_progress_bar(console) as progress:
+                task = progress.add_task("Scanning...", total=total)
+                all_identities = multi_fleet.get_all_identities(
+                    sequential=sequential,
+                    on_repo_done=lambda: progress.advance(task),
+                )
         else:
             all_identities = multi_fleet.get_all_identities(sequential=sequential)
 
@@ -2310,13 +2436,13 @@ def who(
         fleet = FleetManager(target_path)
 
         if not json_output:
-            with Progress(
-                SpinnerColumn(),
-                TextColumn("[progress.description]{task.description}"),
-                console=console,
-            ) as progress:
-                progress.add_task("Scanning repositories...", total=None)
-                identities = fleet.get_all_identities(sequential=sequential)
+            repos = fleet.discover_repositories()
+            with _create_progress_bar(console) as progress:
+                task = progress.add_task("Scanning...", total=len(repos))
+                identities = fleet.get_all_identities(
+                    sequential=sequential,
+                    on_repo_done=lambda: progress.advance(task),
+                )
         else:
             identities = fleet.get_all_identities(sequential=sequential)
 
@@ -2381,20 +2507,20 @@ def diff(
         )
 
         if not json_output:
-            with Progress(
-                SpinnerColumn(),
-                TextColumn("[progress.description]{task.description}"),
-                console=console,
-            ) as progress:
-                progress.add_task("Scanning for changes...", total=None)
+            all_repos_discovered = multi_fleet.discover_all_repositories()
+            total = sum(len(repos) for _, repos in all_repos_discovered)
+            total_repos_per_root = {root: len(repos) for root, repos in all_repos_discovered}
+            with _create_progress_bar(console) as progress:
+                task = progress.add_task("Scanning...", total=total)
                 all_diffs = multi_fleet.get_all_diff(
-                    sequential=sequential, dirty_only=not all_repos
+                    sequential=sequential,
+                    dirty_only=not all_repos,
+                    on_repo_done=lambda: progress.advance(task),
                 )
         else:
             all_diffs = multi_fleet.get_all_diff(sequential=sequential, dirty_only=not all_repos)
-
-        all_repos_discovered = multi_fleet.discover_all_repositories()
-        total_repos_per_root = {root: len(repos) for root, repos in all_repos_discovered}
+            all_repos_discovered = multi_fleet.discover_all_repositories()
+            total_repos_per_root = {root: len(repos) for root, repos in all_repos_discovered}
 
         formatter.print_multi_root_diff_list(all_diffs, total_repos_per_root)
     else:
@@ -2406,14 +2532,14 @@ def diff(
         )
 
         if not json_output:
-            with Progress(
-                SpinnerColumn(),
-                TextColumn("[progress.description]{task.description}"),
-                console=console,
-            ) as progress:
-                progress.add_task("Scanning for changes...", total=None)
-                repos = fleet.discover_repositories()
-                diffs = fleet.get_all_diff(sequential=sequential, dirty_only=not all_repos)
+            repos = fleet.discover_repositories()
+            with _create_progress_bar(console) as progress:
+                task = progress.add_task("Scanning...", total=len(repos))
+                diffs = fleet.get_all_diff(
+                    sequential=sequential,
+                    dirty_only=not all_repos,
+                    on_repo_done=lambda: progress.advance(task),
+                )
         else:
             repos = fleet.discover_repositories()
             diffs = fleet.get_all_diff(sequential=sequential, dirty_only=not all_repos)
@@ -2460,13 +2586,14 @@ def remote(
         multi_fleet = MultiRootFleetManager(root_paths)
 
         if not json_output:
-            with Progress(
-                SpinnerColumn(),
-                TextColumn("[progress.description]{task.description}"),
-                console=console,
-            ) as progress:
-                progress.add_task("Scanning repositories...", total=None)
-                all_remotes = multi_fleet.get_all_remotes(sequential=sequential)
+            all_repos = multi_fleet.discover_all_repositories()
+            total = sum(len(repos) for _, repos in all_repos)
+            with _create_progress_bar(console) as progress:
+                task = progress.add_task("Scanning...", total=total)
+                all_remotes = multi_fleet.get_all_remotes(
+                    sequential=sequential,
+                    on_repo_done=lambda: progress.advance(task),
+                )
         else:
             all_remotes = multi_fleet.get_all_remotes(sequential=sequential)
 
@@ -2477,13 +2604,13 @@ def remote(
         fleet = FleetManager(target_path)
 
         if not json_output:
-            with Progress(
-                SpinnerColumn(),
-                TextColumn("[progress.description]{task.description}"),
-                console=console,
-            ) as progress:
-                progress.add_task("Scanning repositories...", total=None)
-                remotes = fleet.get_all_remotes(sequential=sequential)
+            repos = fleet.discover_repositories()
+            with _create_progress_bar(console) as progress:
+                task = progress.add_task("Scanning...", total=len(repos))
+                remotes = fleet.get_all_remotes(
+                    sequential=sequential,
+                    on_repo_done=lambda: progress.advance(task),
+                )
         else:
             remotes = fleet.get_all_remotes(sequential=sequential)
 
