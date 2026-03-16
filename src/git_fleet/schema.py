@@ -329,7 +329,7 @@ def get_tool_schema() -> dict:
             },
             {
                 "name": "fetch",
-                "description": "Fetch all remotes for all repositories. Updates remote tracking branches without modifying local branches.",
+                "description": "Fetch all remotes for all repositories. Updates remote tracking branches without modifying local branches. Automatically recovers from case-insensitive filesystem ref conflicts (common on macOS when remote has branches differing only in case).",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -378,7 +378,7 @@ def get_tool_schema() -> dict:
             },
             {
                 "name": "pull",
-                "description": "Pull repositories that are behind remote. Default smart mode checks file-level overlap for conflict-risk repos and pulls if files don't overlap. Use --safe to skip all conflict-risk repos, or --force to pull everything.",
+                "description": "Pull repositories that are behind remote. Default smart mode checks file-level overlap for conflict-risk repos and pulls if files don't overlap. Use --safe to skip all conflict-risk repos, or --force to pull everything. Automatically falls back to merge when pull fails due to case-insensitive filesystem ref conflicts.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -780,5 +780,6 @@ def get_tool_schema() -> dict:
             "Use 'who' to verify Git identity configuration before committing",
             "Use 'remote --json' or 'list --remote --json' to get remote URLs and protocols",
             "Sync commands exclude no-remote and detached HEAD repos by default; use --include-no-remote and --include-detached to include them",
+            "Operations that encounter case-insensitive filesystem ref conflicts (macOS) are automatically recovered and reported as warnings in JSON output (warning field in results, warned count in summary)",
         ],
     }

@@ -145,9 +145,10 @@ class OperationResult:
     operation: str
     message: str = ""
     error: str = ""
+    warning: str = ""
 
     def to_dict(self) -> dict:
-        return {
+        d = {
             "path": str(self.path),
             "name": self.name,
             "success": self.success,
@@ -155,6 +156,9 @@ class OperationResult:
             "message": self.message,
             "error": self.error,
         }
+        if self.warning:
+            d["warning"] = self.warning
+        return d
 
 
 @dataclass
@@ -180,8 +184,10 @@ class SyncOperationSummary:
 
     fetched: int = 0
     fetched_failed: int = 0
+    fetched_warned: int = 0
     pulled: int = 0
     pulled_failed: int = 0
+    pulled_warned: int = 0
     pushed: int = 0
     pushed_failed: int = 0
 
@@ -199,8 +205,10 @@ class SyncOperationSummary:
         return cls(
             fetched=sum(1 for r in fetch_results if r.success),
             fetched_failed=sum(1 for r in fetch_results if not r.success),
+            fetched_warned=sum(1 for r in fetch_results if r.success and r.warning),
             pulled=sum(1 for r in pull_results if r.success),
             pulled_failed=sum(1 for r in pull_results if not r.success),
+            pulled_warned=sum(1 for r in pull_results if r.success and r.warning),
             pushed=sum(1 for r in push_results if r.success),
             pushed_failed=sum(1 for r in push_results if not r.success),
         )
@@ -326,6 +334,9 @@ class RepositoryDiff:
 # =============================================================================
 
 
+_CASE_INSENSITIVE_FS_MSG = "case-insensitive filesystem"
+
+
 class GitOperations:
     """Low-level Git operations for a single repository."""
 
@@ -342,15 +353,18 @@ class GitOperations:
             check=check,
         )
 
-    def fetch_all(self) -> tuple[bool, str]:
-        """Fetch all remotes."""
+    def fetch_all(self) -> tuple[bool, str, str]:
+        """Fetch all remotes. Returns (success, error_message, warning)."""
         try:
             result = self._run("fetch", "--all", "--prune", check=False)
             if result.returncode != 0:
-                return False, result.stderr.strip()
-            return True, ""
+                stderr = result.stderr.strip()
+                if _CASE_INSENSITIVE_FS_MSG in stderr:
+                    return True, "", "Case-insensitive ref conflict (partial fetch succeeded)"
+                return False, stderr, ""
+            return True, "", ""
         except Exception as e:
-            return False, str(e)
+            return False, str(e), ""
 
     def get_current_branch(self) -> str:
         """Get current branch name."""
@@ -654,15 +668,35 @@ class GitOperations:
 
         return bool(local_files & remote_files)
 
-    def pull(self) -> tuple[bool, str]:
-        """Pull from remote."""
+    def pull(self) -> tuple[bool, str, str]:
+        """Pull from remote. Returns (success, message, warning)."""
         try:
             result = self._run("pull", check=False)
             if result.returncode != 0:
-                return False, result.stderr.strip() or result.stdout.strip()
-            return True, result.stdout.strip()
+                stderr = result.stderr.strip() or result.stdout.strip()
+                if _CASE_INSENSITIVE_FS_MSG in stderr:
+                    return self._pull_via_merge()
+                return False, stderr, ""
+            return True, result.stdout.strip(), ""
         except Exception as e:
-            return False, str(e)
+            return False, str(e), ""
+
+    def _pull_via_merge(self) -> tuple[bool, str, str]:
+        """Fallback pull via merge when git pull fails due to case-insensitive ref conflicts."""
+        remote_branch = self.get_remote_branch()
+        if not remote_branch:
+            return False, "Cannot determine upstream branch for merge fallback", ""
+        try:
+            result = self._run("merge", remote_branch, check=False)
+            if result.returncode != 0:
+                return False, result.stderr.strip() or result.stdout.strip(), ""
+            return (
+                True,
+                result.stdout.strip(),
+                "Used merge fallback due to case-insensitive ref conflict",
+            )
+        except Exception as e:
+            return False, str(e), ""
 
     def push(self) -> tuple[bool, str]:
         """Push to remote."""
@@ -813,7 +847,7 @@ class GitRepository:
 
     def fetch(self) -> OperationResult:
         """Fetch all remotes."""
-        success, message = self.ops.fetch_all()
+        success, message, warning = self.ops.fetch_all()
         return OperationResult(
             path=self.path,
             name=self.name,
@@ -821,6 +855,7 @@ class GitRepository:
             operation="fetch",
             message="Fetched successfully" if success else "",
             error=message if not success else "",
+            warning=warning,
         )
 
     def has_file_conflicts(self) -> bool:
@@ -829,7 +864,7 @@ class GitRepository:
 
     def pull(self) -> OperationResult:
         """Pull from remote."""
-        success, message = self.ops.pull()
+        success, message, warning = self.ops.pull()
         return OperationResult(
             path=self.path,
             name=self.name,
@@ -837,6 +872,7 @@ class GitRepository:
             operation="pull",
             message=message if success else "",
             error=message if not success else "",
+            warning=warning,
         )
 
     def push(self) -> OperationResult:
@@ -2041,6 +2077,10 @@ def sync(
             if failed:
                 for r in failed:
                     console.print(f"    [red]✗ {r.name}: {r.error}[/]")
+            warned = [r for _, results in fetch_results for r in results if r.success and r.warning]
+            if warned:
+                for r in warned:
+                    console.print(f"    [yellow]⚠ {r.name}: {r.warning}[/]")
             console.print()
 
         # Get status once after fetch (no re-fetch needed)
@@ -2076,6 +2116,12 @@ def sync(
                 if failed:
                     for r in failed:
                         console.print(f"    [red]✗ {r.name}: {r.error}[/]")
+                warned = [
+                    r for _, results in pull_results for r in results if r.success and r.warning
+                ]
+                if warned:
+                    for r in warned:
+                        console.print(f"    [yellow]⚠ {r.name}: {r.warning}[/]")
                 console.print()
             else:
                 console.print("  No repositories needed pulling\n")
@@ -2201,6 +2247,10 @@ def sync(
         if failed:
             for r in failed:
                 console.print(f"    [red]✗ {r.name}: {r.error}[/]")
+        warned = [r for r in fetch_results if r.success and r.warning]
+        if warned:
+            for r in warned:
+                console.print(f"    [yellow]⚠ {r.name}: {r.warning}[/]")
         console.print()
 
     # Get status once after fetch (no re-fetch needed)
@@ -2235,6 +2285,10 @@ def sync(
             if failed:
                 for r in failed:
                     console.print(f"    [red]✗ {r.name}: {r.error}[/]")
+            warned = [r for r in pull_results if r.success and r.warning]
+            if warned:
+                for r in warned:
+                    console.print(f"    [yellow]⚠ {r.name}: {r.warning}[/]")
             console.print()
         else:
             console.print("  No repositories needed pulling\n")

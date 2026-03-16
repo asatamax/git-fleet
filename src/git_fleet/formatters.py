@@ -369,12 +369,18 @@ class OutputFormatter:
         table.add_column("Message")
 
         success_count = 0
+        warned_count = 0
         for result in results:
             repo_display = display_names.get(result.path, result.name)
             if result.success:
                 success_count += 1
-                status = "[green]✓[/]"
-                message = result.message[:50] if result.message else "OK"
+                if result.warning:
+                    warned_count += 1
+                    status = "[yellow]⚠[/]"
+                    message = f"[yellow]{result.warning[:50]}[/]"
+                else:
+                    status = "[green]✓[/]"
+                    message = result.message[:50] if result.message else "OK"
             else:
                 status = "[red]✗[/]"
                 message = f"[red]{result.error[:50]}[/]" if result.error else "Failed"
@@ -382,17 +388,24 @@ class OutputFormatter:
             table.add_row(repo_display, status, message)
 
         self.console.print(table)
-        self.console.print(f"\n[bold]Success:[/] {success_count}/{len(results)}")
+        parts = [f"Success: {success_count}/{len(results)}"]
+        if warned_count:
+            parts.append(f"[yellow]Warnings: {warned_count}[/]")
+        self.console.print(f"\n[bold]{' | '.join(parts)}[/]")
 
     def _print_operation_json(self, results: list[OperationResult]):
         """Print operation results as JSON."""
+        summary: dict[str, int] = {
+            "total": len(results),
+            "success": sum(1 for r in results if r.success),
+            "failed": sum(1 for r in results if not r.success),
+        }
+        warned = sum(1 for r in results if r.success and r.warning)
+        if warned:
+            summary["warned"] = warned
         output = {
             "results": [r.to_dict() for r in results],
-            "summary": {
-                "total": len(results),
-                "success": sum(1 for r in results if r.success),
-                "failed": sum(1 for r in results if not r.success),
-            },
+            "summary": summary,
         }
         self.console.print(json.dumps(output, indent=2))
 
@@ -819,18 +832,25 @@ class OutputFormatter:
                         "results": [r.to_dict() for r in results],
                     }
                 )
+            summary: dict[str, int] = {
+                "total": total,
+                "success": success,
+                "failed": total - success,
+            }
+            warned = sum(
+                sum(1 for r in results if r.success and r.warning) for _, results in all_results
+            )
+            if warned:
+                summary["warned"] = warned
             output = {
                 "roots": roots_data,
-                "summary": {
-                    "total": total,
-                    "success": success,
-                    "failed": total - success,
-                },
+                "summary": summary,
             }
             self.console.print(json.dumps(output, indent=2))
         else:
             total = 0
             success_count = 0
+            warned_count = 0
 
             flat_results = []
             for root, results in all_results:
@@ -839,6 +859,8 @@ class OutputFormatter:
                     total += 1
                     if result.success:
                         success_count += 1
+                        if result.warning:
+                            warned_count += 1
 
             if not flat_results:
                 self.console.print(f"[dim]No repositories to {operation}[/]")
@@ -853,8 +875,12 @@ class OutputFormatter:
             for root_name, result in flat_results:
                 repo_display = display_names.get(result.path, result.name)
                 if result.success:
-                    status = "[green]✓[/]"
-                    message = result.message[:50] if result.message else "OK"
+                    if result.warning:
+                        status = "[yellow]⚠[/]"
+                        message = f"[yellow]{result.warning[:50]}[/]"
+                    else:
+                        status = "[green]✓[/]"
+                        message = result.message[:50] if result.message else "OK"
                 else:
                     status = "[red]✗[/]"
                     message = f"[red]{result.error[:50]}[/]" if result.error else "Failed"
@@ -862,7 +888,10 @@ class OutputFormatter:
                 table.add_row(root_name, repo_display, status, message)
 
             self.console.print(table)
-            self.console.print(f"\n[bold]Success:[/] {success_count}/{total}")
+            parts = [f"Success: {success_count}/{total}"]
+            if warned_count:
+                parts.append(f"[yellow]Warnings: {warned_count}[/]")
+            self.console.print(f"\n[bold]{' | '.join(parts)}[/]")
 
     def print_remote_list(
         self,
