@@ -805,7 +805,7 @@ class GitRepository:
 
         try:
             if fetch_first:
-                success, error = self.ops.fetch_all()
+                success, error, _warning = self.ops.fetch_all()
                 if not success:
                     status.sync_status = SyncStatus.ERROR
                     status.error_message = f"Fetch failed: {error}"
@@ -1572,18 +1572,42 @@ def status(
         if not json_output:
             all_repos = multi_fleet.discover_all_repositories()
             total = sum(len(repos) for _, repos in all_repos)
-            desc = "Fetching and analyzing..." if not no_fetch else "Analyzing..."
+
+            if not no_fetch:
+                with _create_progress_bar(console) as progress:
+                    task = progress.add_task("Fetching...", total=total)
+                    fetch_results = multi_fleet.fetch_all(
+                        sequential=sequential,
+                        on_repo_done=lambda: progress.advance(task),
+                    )
+                fetch_total = sum(len(results) for _, results in fetch_results)
+                fetch_success = sum(
+                    sum(1 for r in results if r.success) for _, results in fetch_results
+                )
+                console.print(f"  Fetched {fetch_success}/{fetch_total} repositories")
+                failed = [r for _, results in fetch_results for r in results if not r.success]
+                if failed:
+                    for r in failed:
+                        console.print(f"    [red]✗ {r.name}: {r.error}[/]")
+                warned = [
+                    r for _, results in fetch_results for r in results if r.success and r.warning
+                ]
+                if warned:
+                    for r in warned:
+                        console.print(f"    [yellow]⚠ {r.name}: {r.warning}[/]")
+                console.print()
+
             with _create_progress_bar(console) as progress:
-                task = progress.add_task(desc, total=total)
+                task = progress.add_task("Analyzing...", total=total)
                 all_statuses = multi_fleet.get_all_status(
-                    fetch_first=not no_fetch,
+                    fetch_first=False,
                     sequential=sequential,
                     on_repo_done=lambda: progress.advance(task),
                 )
         else:
-            all_statuses = multi_fleet.get_all_status(
-                fetch_first=not no_fetch, sequential=sequential
-            )
+            if not no_fetch:
+                multi_fleet.fetch_all(sequential=sequential)
+            all_statuses = multi_fleet.get_all_status(fetch_first=False, sequential=sequential)
 
         summary = multi_fleet.get_summary(all_statuses)
         formatter.print_multi_root_status_list(all_statuses, summary)
@@ -1607,18 +1631,38 @@ def status(
 
             console.print(f"Found [bold]{len(repos)}[/] repositories\n")
 
-            desc = "Fetching and analyzing..." if not no_fetch else "Analyzing..."
+            if not no_fetch:
+                with _create_progress_bar(console) as progress:
+                    task = progress.add_task("Fetching...", total=len(repos))
+                    fetch_results = fleet.fetch_all(
+                        sequential=sequential,
+                        on_repo_done=lambda: progress.advance(task),
+                    )
+                fetch_success = sum(1 for r in fetch_results if r.success)
+                console.print(f"  Fetched {fetch_success}/{len(fetch_results)} repositories")
+                failed = [r for r in fetch_results if not r.success]
+                if failed:
+                    for r in failed:
+                        console.print(f"    [red]✗ {r.name}: {r.error}[/]")
+                warned = [r for r in fetch_results if r.success and r.warning]
+                if warned:
+                    for r in warned:
+                        console.print(f"    [yellow]⚠ {r.name}: {r.warning}[/]")
+                console.print()
+
             with _create_progress_bar(console) as progress:
-                task = progress.add_task(desc, total=len(repos))
+                task = progress.add_task("Analyzing...", total=len(repos))
                 statuses = fleet.get_all_status(
-                    fetch_first=not no_fetch,
+                    fetch_first=False,
                     sequential=sequential,
                     on_repo_done=lambda: progress.advance(task),
                 )
         else:
             repos = fleet.discover_repositories()
+            if not no_fetch:
+                fleet.fetch_all(sequential=sequential)
             statuses = fleet.get_all_status(
-                fetch_first=not no_fetch,
+                fetch_first=False,
                 sequential=sequential,
             )
 
