@@ -1512,6 +1512,17 @@ def _create_progress_bar(console: Console) -> Progress:
     )
 
 
+def _print_success_bullets(console: Console, results: list[OperationResult]) -> None:
+    """Print successful repository names as a dim bullet list.
+
+    Warnings and failures are skipped here because they're already surfaced
+    by the existing ``⚠`` / ``✗`` lines.
+    """
+    for r in results:
+        if r.success and not r.warning:
+            console.print(f"    [dim]• {r.name}[/]")
+
+
 @app.command()
 def status(
     path: Path = typer.Argument(
@@ -2171,6 +2182,10 @@ def sync(
             if total > 0:
                 success = sum(sum(1 for r in results if r.success) for _, results in pull_results)
                 console.print(f"  Pulled {success}/{total} repositories")
+                _print_success_bullets(
+                    console,
+                    [r for _, results in pull_results for r in results],
+                )
                 failed = [r for _, results in pull_results for r in results if not r.success]
                 if failed:
                     for r in failed:
@@ -2216,6 +2231,10 @@ def sync(
             if total > 0:
                 success = sum(sum(1 for r in results if r.success) for _, results in push_results)
                 console.print(f"  Pushed {success}/{total} repositories")
+                _print_success_bullets(
+                    console,
+                    [r for _, results in push_results for r in results],
+                )
                 failed = [r for _, results in push_results for r in results if not r.success]
                 if failed:
                     for r in failed:
@@ -2342,6 +2361,7 @@ def sync(
         if pull_results:
             success = sum(1 for r in pull_results if r.success)
             console.print(f"  Pulled {success}/{len(pull_results)} repositories")
+            _print_success_bullets(console, pull_results)
             failed = [r for r in pull_results if not r.success]
             if failed:
                 for r in failed:
@@ -2382,6 +2402,7 @@ def sync(
         if push_results:
             success = sum(1 for r in push_results if r.success)
             console.print(f"  Pushed {success}/{len(push_results)} repositories")
+            _print_success_bullets(console, push_results)
             failed = [r for r in push_results if not r.success]
             if failed:
                 for r in failed:
