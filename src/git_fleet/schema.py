@@ -53,6 +53,11 @@ def get_tool_schema() -> dict:
                             "description": "Include repositories with detached HEAD (e.g. SPM checkouts)",
                             "default": False,
                         },
+                        "dirty": {
+                            "type": "boolean",
+                            "description": "Show only repositories that are not clean and in sync (display filter for the rendered table; ignored when --json is set so machine consumers always receive the full repository list)",
+                            "default": False,
+                        },
                     },
                     "required": [],
                 },
@@ -123,6 +128,10 @@ def get_tool_schema() -> dict:
                     {
                         "description": "Quick status without fetching",
                         "command": "git-fleet status --json --no-fetch",
+                    },
+                    {
+                        "description": "Only show repositories that need attention (clean rows hidden in the table)",
+                        "command": "git-fleet status --dirty",
                     },
                 ],
             },
@@ -544,6 +553,11 @@ def get_tool_schema() -> dict:
                             "description": "Include repositories with detached HEAD (e.g. SPM checkouts)",
                             "default": False,
                         },
+                        "dirty": {
+                            "type": "boolean",
+                            "description": "Show only repositories that are not clean and in sync in the final status table (display filter; ignored when --json is set so machine consumers always receive the full repository list)",
+                            "default": False,
+                        },
                     },
                     "required": [],
                 },
@@ -555,6 +569,10 @@ def get_tool_schema() -> dict:
                     {
                         "description": "Dry-run sync across configured roots",
                         "command": "git-fleet sync --json --dry-run",
+                    },
+                    {
+                        "description": "Sync everything, then show only repos still needing attention",
+                        "command": "git-fleet sync --dirty",
                     },
                 ],
             },
@@ -750,6 +768,7 @@ def get_tool_schema() -> dict:
             "--roots, -r": "Path to roots file (overrides auto-resolution)",
             "--include-no-remote": "Include repositories with no configured remotes (status/fetch/pull/push/sync/diff)",
             "--include-detached": "Include repositories with detached HEAD (status/fetch/pull/push/sync/diff)",
+            "--dirty, -d": "Show only repositories not clean and in sync (status/sync; display-only filter, ignored with --json)",
         },
         "rootsFileAutoResolution": {
             "description": "When --roots is not specified, git-fleet automatically searches for a roots file",

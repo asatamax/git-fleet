@@ -1551,6 +1551,12 @@ def status(
         "--include-detached",
         help="Include repositories with detached HEAD (e.g. SPM checkouts)",
     ),
+    dirty_only: bool = typer.Option(
+        False,
+        "--dirty",
+        "-d",
+        help=("Show only repositories not clean and in sync (display filter; ignored with --json)"),
+    ),
 ):
     """Show status of all repositories."""
     console, formatter = get_console_and_formatter(json_output)
@@ -1610,7 +1616,7 @@ def status(
             all_statuses = multi_fleet.get_all_status(fetch_first=False, sequential=sequential)
 
         summary = multi_fleet.get_summary(all_statuses)
-        formatter.print_multi_root_status_list(all_statuses, summary)
+        formatter.print_multi_root_status_list(all_statuses, summary, dirty_only=dirty_only)
     else:
         # Single root mode
         target_path = path if path else Path(".")
@@ -1667,7 +1673,7 @@ def status(
             )
 
         summary = fleet.get_summary(statuses)
-        formatter.print_status_list(statuses, summary, target_path.resolve())
+        formatter.print_status_list(statuses, summary, target_path.resolve(), dirty_only=dirty_only)
 
 
 @app.command()
@@ -2079,6 +2085,15 @@ def sync(
         "--include-detached",
         help="Include repositories with detached HEAD (e.g. SPM checkouts)",
     ),
+    dirty_only: bool = typer.Option(
+        False,
+        "--dirty",
+        "-d",
+        help=(
+            "Show only repositories not clean and in sync in the final status "
+            "(display filter; ignored with --json)"
+        ),
+    ),
 ):
     """Sync all repositories: fetch, pull (smart), then push."""
     console, formatter = get_console_and_formatter(json_output)
@@ -2223,7 +2238,9 @@ def sync(
             sync_summary = SyncOperationSummary.from_multi_root_results(
                 fetch_results, pull_results, push_results
             )
-            formatter.print_multi_root_status_list(all_statuses, summary, sync_summary)
+            formatter.print_multi_root_status_list(
+                all_statuses, summary, sync_summary, dirty_only=dirty_only
+            )
 
             if summary.conflict_risk > 0:
                 console.print(
@@ -2385,7 +2402,9 @@ def sync(
         console.print()
         summary = fleet.get_summary(statuses)
         sync_summary = SyncOperationSummary.from_results(fetch_results, pull_results, push_results)
-        formatter.print_status_list(statuses, summary, target_path.resolve(), sync_summary)
+        formatter.print_status_list(
+            statuses, summary, target_path.resolve(), sync_summary, dirty_only=dirty_only
+        )
 
         if summary.conflict_risk > 0:
             console.print(
