@@ -35,8 +35,11 @@ git-fleet pull ~/Development
 # Push repos that are ahead
 git-fleet push ~/Development
 
-# Full sync: fetch → pull → push
+# Full sync: lightweight fetch → pull → push
 git-fleet sync ~/Development
+
+# Explicit full remote maintenance during sync
+git-fleet sync ~/Development --all-remotes --prune
 
 # List all discovered repositories
 git-fleet list ~/Development
@@ -90,10 +93,13 @@ git-fleet status
 |--------|-------|-------------|
 | `--json` | `-j` | Output as JSON (recommended for AI agents) |
 | `--sequential` | `-s` | Run operations sequentially instead of parallel |
+| `--jobs` | `-J` | Maximum number of repositories to process in parallel for sync |
 | `--dry-run` | `-n` | Preview operations without executing |
 | `--roots` | `-r` | Path to file containing repository root paths |
 | `--no-fetch` | | Skip fetching before status check |
 | `--all` | `-a` | Pull/push all repositories, not just those needing it |
+| `--all-remotes` | | Fetch all remotes during sync instead of only upstream/origin |
+| `--prune` | | Prune deleted remote-tracking branches during sync fetch |
 | `--force` | `-f` | Pull even if there's conflict risk |
 | `--paths` | `-p` | Output only paths (for piping to fzf etc.) |
 | `--schema` | | Output MCP-compatible tool schema for AI agents |
@@ -101,6 +107,7 @@ git-fleet status
 ## Features
 
 - **Parallel execution**: Operations run in parallel by default for speed
+- **Fast routine sync**: `sync` fetches each repo's upstream/origin remote by default; use `--all-remotes --prune` for full remote maintenance
 - **Safety checks**: Pull skips diverged or dirty repositories unless `--force`
 - **Identity verification**: `who` command shows Git user.name/email configuration
 - **Multi-root support**: Manage repos across multiple directory trees

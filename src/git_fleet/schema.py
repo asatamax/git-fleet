@@ -515,7 +515,7 @@ def get_tool_schema() -> dict:
             },
             {
                 "name": "sync",
-                "description": "Full synchronization: fetch all, pull (smart), then push. This is the recommended command for routine synchronization. Smart mode checks file-level overlap for conflict-risk repos.",
+                "description": "Full synchronization: lightweight fetch, pull (smart), then push. By default, fetches only each repository's upstream/origin remote for routine speed. Use --all-remotes and --prune for explicit remote maintenance. Smart mode checks file-level overlap for conflict-risk repos.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -543,6 +543,12 @@ def get_tool_schema() -> dict:
                             "description": "Run sequentially instead of parallel",
                             "default": False,
                         },
+                        "jobs": {
+                            "type": "integer",
+                            "description": "Maximum number of repositories to process in parallel",
+                            "default": 8,
+                            "minimum": 1,
+                        },
                         "include_no_remote": {
                             "type": "boolean",
                             "description": "Include repositories with no configured remotes",
@@ -551,6 +557,16 @@ def get_tool_schema() -> dict:
                         "include_detached": {
                             "type": "boolean",
                             "description": "Include repositories with detached HEAD (e.g. SPM checkouts)",
+                            "default": False,
+                        },
+                        "all_remotes": {
+                            "type": "boolean",
+                            "description": "Fetch all remotes before syncing instead of only the upstream/origin remote",
+                            "default": False,
+                        },
+                        "prune": {
+                            "type": "boolean",
+                            "description": "Prune deleted remote-tracking branches during the sync fetch step",
                             "default": False,
                         },
                         "dirty": {
@@ -573,6 +589,10 @@ def get_tool_schema() -> dict:
                     {
                         "description": "Sync everything, then show only repos still needing attention",
                         "command": "git-fleet sync --dirty",
+                    },
+                    {
+                        "description": "Sync with explicit full remote maintenance",
+                        "command": "git-fleet sync --all-remotes --prune",
                     },
                 ],
             },
@@ -764,10 +784,13 @@ def get_tool_schema() -> dict:
         "globalOptions": {
             "--json, -j": "Output in JSON format (recommended for AI agents)",
             "--sequential, -s": "Run operations sequentially instead of parallel",
+            "--jobs, -J": "Maximum number of repositories to process in parallel (sync)",
             "--dry-run, -n": "Preview operations without executing (available for pull/push/sync)",
             "--roots, -r": "Path to roots file (overrides auto-resolution)",
             "--include-no-remote": "Include repositories with no configured remotes (status/fetch/pull/push/sync/diff)",
             "--include-detached": "Include repositories with detached HEAD (status/fetch/pull/push/sync/diff)",
+            "--all-remotes": "Fetch all remotes during sync instead of only upstream/origin",
+            "--prune": "Prune deleted remote-tracking branches during sync fetch",
             "--dirty, -d": "Show only repositories not clean and in sync (status/sync; display-only filter, ignored with --json)",
         },
         "rootsFileAutoResolution": {

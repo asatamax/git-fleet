@@ -65,6 +65,9 @@ class PullMode(StrEnum):
     FORCE = "force"  # pull everything regardless
 
 
+DEFAULT_MAX_WORKERS = 8
+
+
 @dataclass
 class RepositoryStatus:
     """Complete status of a Git repository."""
@@ -353,10 +356,60 @@ class GitOperations:
             check=check,
         )
 
-    def fetch_all(self) -> tuple[bool, str, str]:
-        """Fetch all remotes. Returns (success, error_message, warning)."""
+    def get_remote_names(self) -> list[str]:
+        """Get configured remote names."""
         try:
-            result = self._run("fetch", "--all", "--prune", check=False)
+            result = self._run("remote", check=False)
+            if result.returncode == 0 and result.stdout.strip():
+                return [n.strip() for n in result.stdout.splitlines() if n.strip()]
+        except Exception:
+            pass
+        return []
+
+    def get_default_fetch_remote(self) -> str:
+        """Get the remote that should be fetched for routine sync."""
+        current_branch = self.get_current_branch()
+        if current_branch and current_branch != "HEAD":
+            try:
+                result = self._run(
+                    "config",
+                    "--get",
+                    f"branch.{current_branch}.remote",
+                    check=False,
+                )
+                if result.returncode == 0 and result.stdout.strip():
+                    return result.stdout.strip()
+            except Exception:
+                pass
+
+        remotes = self.get_remote_names()
+        if "origin" in remotes:
+            return "origin"
+        return remotes[0] if remotes else ""
+
+    def fetch_all(
+        self,
+        *,
+        all_remotes: bool = True,
+        prune: bool = True,
+    ) -> tuple[bool, str, str]:
+        """Fetch remotes. Returns (success, message_or_error, warning)."""
+        try:
+            if all_remotes:
+                args = ["fetch", "--all"]
+                if prune:
+                    args.append("--prune")
+            else:
+                remote = self.get_default_fetch_remote()
+                if not remote:
+                    return True, "No remotes configured", ""
+
+                args = ["fetch"]
+                if prune:
+                    args.append("--prune")
+                args.append(remote)
+
+            result = self._run(*args, check=False)
             if result.returncode != 0:
                 stderr = result.stderr.strip()
                 if _CASE_INSENSITIVE_FS_MSG in stderr:
@@ -710,11 +763,7 @@ class GitOperations:
 
     def has_remotes(self) -> bool:
         """Check if any remotes are configured."""
-        try:
-            result = self._run("remote", check=False)
-            return result.returncode == 0 and bool(result.stdout.strip())
-        except Exception:
-            return False
+        return bool(self.get_remote_names())
 
     def is_detached(self) -> bool:
         """Check if HEAD is in detached state."""
@@ -728,12 +777,7 @@ class GitOperations:
         """Get all remotes with their URLs."""
         remotes = []
         try:
-            # Get list of remote names
-            result = self._run("remote", check=False)
-            if result.returncode != 0:
-                return []
-
-            remote_names = [n.strip() for n in result.stdout.strip().split("\n") if n.strip()]
+            remote_names = self.get_remote_names()
 
             for name in remote_names:
                 # Get fetch URL
@@ -845,15 +889,20 @@ class GitRepository:
 
         return status
 
-    def fetch(self) -> OperationResult:
-        """Fetch all remotes."""
-        success, message, warning = self.ops.fetch_all()
+    def fetch(
+        self,
+        *,
+        all_remotes: bool = True,
+        prune: bool = True,
+    ) -> OperationResult:
+        """Fetch remotes."""
+        success, message, warning = self.ops.fetch_all(all_remotes=all_remotes, prune=prune)
         return OperationResult(
             path=self.path,
             name=self.name,
             success=success,
             operation="fetch",
-            message="Fetched successfully" if success else "",
+            message=(message or "Fetched successfully") if success else "",
             error=message if not success else "",
             warning=warning,
         )
@@ -940,7 +989,7 @@ class FleetManager:
     def __init__(
         self,
         root_path: Path,
-        max_workers: int = 8,
+        max_workers: int = DEFAULT_MAX_WORKERS,
         *,
         include_no_remote: bool = True,
         include_detached: bool = True,
@@ -1020,10 +1069,13 @@ class FleetManager:
         self,
         sequential: bool = False,
         on_repo_done: Callable[[], None] | None = None,
+        *,
+        all_remotes: bool = True,
+        prune: bool = True,
     ) -> list[OperationResult]:
         """Fetch all repositories."""
         return self._execute_parallel(
-            lambda repo: repo.fetch(),
+            lambda repo: repo.fetch(all_remotes=all_remotes, prune=prune),
             sequential=sequential,
             on_repo_done=on_repo_done,
         )
@@ -1278,7 +1330,7 @@ class MultiRootFleetManager:
     def __init__(
         self,
         roots: list[Path],
-        max_workers: int = 8,
+        max_workers: int = DEFAULT_MAX_WORKERS,
         *,
         include_no_remote: bool = True,
         include_detached: bool = True,
@@ -1294,6 +1346,42 @@ class MultiRootFleetManager:
             )
             for root in self.roots
         }
+
+    def _execute_repo_operation_across_roots(
+        self,
+        operation: Callable[[GitRepository], Any],
+        *,
+        sequential: bool = False,
+        on_repo_done: Callable[[], None] | None = None,
+    ) -> list[tuple[Path, list[Any]]]:
+        """Execute a repository operation across all roots with one worker pool."""
+        root_repos = [
+            (root, fleet.discover_repositories()) for root, fleet in self._fleet_managers.items()
+        ]
+        results_by_root: dict[Path, list[Any]] = {root: [] for root, _ in root_repos}
+
+        if sequential:
+            for root, repos in root_repos:
+                for repo in repos:
+                    results_by_root[root].append(operation(repo))
+                    if on_repo_done:
+                        on_repo_done()
+        else:
+            with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+                futures = {
+                    executor.submit(operation, repo): root
+                    for root, repos in root_repos
+                    for repo in repos
+                }
+                for future in as_completed(futures):
+                    results_by_root[futures[future]].append(future.result())
+                    if on_repo_done:
+                        on_repo_done()
+
+        for results in results_by_root.values():
+            results.sort(key=lambda r: r.path if hasattr(r, "path") else str(r))
+
+        return [(root, results_by_root[root]) for root, _ in root_repos]
 
     def get_all_identities(
         self,
@@ -1341,13 +1429,11 @@ class MultiRootFleetManager:
         on_repo_done: Callable[[], None] | None = None,
     ) -> list[tuple[Path, list[RepositoryStatus]]]:
         """Get status for all repositories across all roots."""
-        results = []
-        for root, fleet in self._fleet_managers.items():
-            statuses = fleet.get_all_status(
-                fetch_first=fetch_first, sequential=sequential, on_repo_done=on_repo_done
-            )
-            results.append((root, statuses))
-        return results
+        return self._execute_repo_operation_across_roots(
+            lambda repo: repo.get_status(fetch_first=fetch_first),
+            sequential=sequential,
+            on_repo_done=on_repo_done,
+        )
 
     def discover_all_repositories(self) -> list[tuple[Path, list[GitRepository]]]:
         """Discover all repositories across all roots."""
@@ -1361,13 +1447,16 @@ class MultiRootFleetManager:
         self,
         sequential: bool = False,
         on_repo_done: Callable[[], None] | None = None,
+        *,
+        all_remotes: bool = True,
+        prune: bool = True,
     ) -> list[tuple[Path, list[OperationResult]]]:
         """Fetch all repositories across all roots."""
-        results = []
-        for root, fleet in self._fleet_managers.items():
-            fetch_results = fleet.fetch_all(sequential=sequential, on_repo_done=on_repo_done)
-            results.append((root, fetch_results))
-        return results
+        return self._execute_repo_operation_across_roots(
+            lambda repo: repo.fetch(all_remotes=all_remotes, prune=prune),
+            sequential=sequential,
+            on_repo_done=on_repo_done,
+        )
 
     def pull_all(
         self,
@@ -2074,6 +2163,13 @@ def sync(
         "-s",
         help="Run sequentially instead of parallel",
     ),
+    jobs: int = typer.Option(
+        DEFAULT_MAX_WORKERS,
+        "--jobs",
+        "-J",
+        min=1,
+        help="Maximum number of repositories to process in parallel",
+    ),
     dry_run: bool = typer.Option(
         False,
         "--dry-run",
@@ -2096,6 +2192,16 @@ def sync(
         "--include-detached",
         help="Include repositories with detached HEAD (e.g. SPM checkouts)",
     ),
+    all_remotes: bool = typer.Option(
+        False,
+        "--all-remotes",
+        help="Fetch all remotes before syncing instead of only the upstream/origin remote",
+    ),
+    prune: bool = typer.Option(
+        False,
+        "--prune",
+        help="Prune deleted remote-tracking branches during the sync fetch step",
+    ),
     dirty_only: bool = typer.Option(
         False,
         "--dirty",
@@ -2106,7 +2212,7 @@ def sync(
         ),
     ),
 ):
-    """Sync all repositories: fetch, pull (smart), then push."""
+    """Sync all repositories: lightweight fetch, pull (smart), then push."""
     console, formatter = get_console_and_formatter(json_output)
 
     resolved_roots = roots or resolve_roots_file()
@@ -2119,6 +2225,7 @@ def sync(
 
         multi_fleet = MultiRootFleetManager(
             root_paths,
+            max_workers=jobs,
             include_no_remote=include_no_remote,
             include_detached=include_detached,
         )
@@ -2134,9 +2241,15 @@ def sync(
                 fetch_results = multi_fleet.fetch_all(
                     sequential=sequential,
                     on_repo_done=lambda: progress.advance(task),
+                    all_remotes=all_remotes,
+                    prune=prune,
                 )
         else:
-            fetch_results = multi_fleet.fetch_all(sequential=sequential)
+            fetch_results = multi_fleet.fetch_all(
+                sequential=sequential,
+                all_remotes=all_remotes,
+                prune=prune,
+            )
         all_results["fetch"] = fetch_results
 
         if not json_output:
@@ -2299,6 +2412,7 @@ def sync(
     target_path = path if path else Path(".")
     fleet = FleetManager(
         target_path,
+        max_workers=jobs,
         include_no_remote=include_no_remote,
         include_detached=include_detached,
     )
@@ -2315,9 +2429,15 @@ def sync(
             fetch_results = fleet.fetch_all(
                 sequential=sequential,
                 on_repo_done=lambda: progress.advance(task),
+                all_remotes=all_remotes,
+                prune=prune,
             )
     else:
-        fetch_results = fleet.fetch_all(sequential=sequential)
+        fetch_results = fleet.fetch_all(
+            sequential=sequential,
+            all_remotes=all_remotes,
+            prune=prune,
+        )
     all_results.extend(fetch_results)
 
     if not json_output:
