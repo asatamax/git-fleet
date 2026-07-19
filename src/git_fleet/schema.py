@@ -10,7 +10,7 @@ def get_tool_schema() -> dict:
     return {
         "name": "git-fleet",
         "version": __version__,
-        "description": "Command multiple Git repositories like a fleet admiral. Manage, monitor, and synchronize all Git repositories under a directory tree with parallel execution. Supports multi-root configuration with auto-resolution (env var, XDG, legacy) or explicit --roots option.",
+        "description": "Command multiple Git repositories like a fleet admiral. Manage, monitor, and synchronize all Git repositories under a directory tree with parallel execution. Supports multi-root configuration with auto-resolution (env var, XDG, legacy) or explicit --roots option; an explicit path argument overrides auto-resolution (see resolutionPrecedence).",
         "usage": "git-fleet <command> [path] [options]",
         "tools": [
             {
@@ -21,12 +21,12 @@ def get_tool_schema() -> dict:
                     "properties": {
                         "path": {
                             "type": "string",
-                            "description": "Root path to scan for repositories (default: current directory)",
+                            "description": "Root path to scan for repositories; overrides an auto-resolved roots file (default: current directory)",
                             "default": ".",
                         },
                         "roots": {
                             "type": "string",
-                            "description": "Path to roots file (overrides auto-resolution). Auto-resolved from: $GIT_FLEET_ROOTS env var → ~/.config/git-fleet/roots → ~/.git-fleet-roots",
+                            "description": "Path to roots file; mutually exclusive with path (combining both is an error). When neither is given, auto-resolved from: $GIT_FLEET_ROOTS env var → ~/.config/git-fleet/roots → ~/.git-fleet-roots",
                         },
                         "json": {
                             "type": "boolean",
@@ -143,12 +143,12 @@ def get_tool_schema() -> dict:
                     "properties": {
                         "path": {
                             "type": "string",
-                            "description": "Root path to scan for repositories (default: current directory)",
+                            "description": "Root path to scan for repositories; overrides an auto-resolved roots file (default: current directory)",
                             "default": ".",
                         },
                         "roots": {
                             "type": "string",
-                            "description": "Path to roots file (overrides auto-resolution). Auto-resolved from: $GIT_FLEET_ROOTS env var → ~/.config/git-fleet/roots → ~/.git-fleet-roots",
+                            "description": "Path to roots file; mutually exclusive with path (combining both is an error). When neither is given, auto-resolved from: $GIT_FLEET_ROOTS env var → ~/.config/git-fleet/roots → ~/.git-fleet-roots",
                         },
                         "json": {
                             "type": "boolean",
@@ -234,12 +234,12 @@ def get_tool_schema() -> dict:
                     "properties": {
                         "path": {
                             "type": "string",
-                            "description": "Root path to scan for repositories (default: current directory)",
+                            "description": "Root path to scan for repositories; overrides an auto-resolved roots file (default: current directory)",
                             "default": ".",
                         },
                         "roots": {
                             "type": "string",
-                            "description": "Path to roots file (overrides auto-resolution). Auto-resolved from: $GIT_FLEET_ROOTS env var → ~/.config/git-fleet/roots → ~/.git-fleet-roots",
+                            "description": "Path to roots file; mutually exclusive with path (combining both is an error). When neither is given, auto-resolved from: $GIT_FLEET_ROOTS env var → ~/.config/git-fleet/roots → ~/.git-fleet-roots",
                         },
                         "json": {
                             "type": "boolean",
@@ -344,12 +344,12 @@ def get_tool_schema() -> dict:
                     "properties": {
                         "path": {
                             "type": "string",
-                            "description": "Root path to scan for repositories",
+                            "description": "Root path to scan for repositories; overrides an auto-resolved roots file",
                             "default": ".",
                         },
                         "roots": {
                             "type": "string",
-                            "description": "Path to roots file (overrides auto-resolution). Auto-resolved from: $GIT_FLEET_ROOTS env var → ~/.config/git-fleet/roots → ~/.git-fleet-roots",
+                            "description": "Path to roots file; mutually exclusive with path (combining both is an error). When neither is given, auto-resolved from: $GIT_FLEET_ROOTS env var → ~/.config/git-fleet/roots → ~/.git-fleet-roots",
                         },
                         "json": {
                             "type": "boolean",
@@ -393,12 +393,12 @@ def get_tool_schema() -> dict:
                     "properties": {
                         "path": {
                             "type": "string",
-                            "description": "Root path to scan for repositories",
+                            "description": "Root path to scan for repositories; overrides an auto-resolved roots file",
                             "default": ".",
                         },
                         "roots": {
                             "type": "string",
-                            "description": "Path to roots file (overrides auto-resolution). Auto-resolved from: $GIT_FLEET_ROOTS env var → ~/.config/git-fleet/roots → ~/.git-fleet-roots",
+                            "description": "Path to roots file; mutually exclusive with path (combining both is an error). When neither is given, auto-resolved from: $GIT_FLEET_ROOTS env var → ~/.config/git-fleet/roots → ~/.git-fleet-roots",
                         },
                         "json": {
                             "type": "boolean",
@@ -462,12 +462,12 @@ def get_tool_schema() -> dict:
                     "properties": {
                         "path": {
                             "type": "string",
-                            "description": "Root path to scan for repositories",
+                            "description": "Root path to scan for repositories; overrides an auto-resolved roots file",
                             "default": ".",
                         },
                         "roots": {
                             "type": "string",
-                            "description": "Path to roots file (overrides auto-resolution). Auto-resolved from: $GIT_FLEET_ROOTS env var → ~/.config/git-fleet/roots → ~/.git-fleet-roots",
+                            "description": "Path to roots file; mutually exclusive with path (combining both is an error). When neither is given, auto-resolved from: $GIT_FLEET_ROOTS env var → ~/.config/git-fleet/roots → ~/.git-fleet-roots",
                         },
                         "json": {
                             "type": "boolean",
@@ -521,12 +521,12 @@ def get_tool_schema() -> dict:
                     "properties": {
                         "path": {
                             "type": "string",
-                            "description": "Root path to scan for repositories",
+                            "description": "Root path to scan for repositories; overrides an auto-resolved roots file",
                             "default": ".",
                         },
                         "roots": {
                             "type": "string",
-                            "description": "Path to roots file (overrides auto-resolution). Auto-resolved from: $GIT_FLEET_ROOTS env var → ~/.config/git-fleet/roots → ~/.git-fleet-roots",
+                            "description": "Path to roots file; mutually exclusive with path (combining both is an error). When neither is given, auto-resolved from: $GIT_FLEET_ROOTS env var → ~/.config/git-fleet/roots → ~/.git-fleet-roots",
                         },
                         "json": {
                             "type": "boolean",
@@ -604,12 +604,12 @@ def get_tool_schema() -> dict:
                     "properties": {
                         "path": {
                             "type": "string",
-                            "description": "Root path to scan for repositories",
+                            "description": "Root path to scan for repositories; overrides an auto-resolved roots file",
                             "default": ".",
                         },
                         "roots": {
                             "type": "string",
-                            "description": "Path to roots file (overrides auto-resolution). Auto-resolved from: $GIT_FLEET_ROOTS env var → ~/.config/git-fleet/roots → ~/.git-fleet-roots",
+                            "description": "Path to roots file; mutually exclusive with path (combining both is an error). When neither is given, auto-resolved from: $GIT_FLEET_ROOTS env var → ~/.config/git-fleet/roots → ~/.git-fleet-roots",
                         },
                         "paths": {
                             "type": "boolean",
@@ -698,12 +698,12 @@ def get_tool_schema() -> dict:
                     "properties": {
                         "path": {
                             "type": "string",
-                            "description": "Root path to scan for repositories (default: current directory)",
+                            "description": "Root path to scan for repositories; overrides an auto-resolved roots file (default: current directory)",
                             "default": ".",
                         },
                         "roots": {
                             "type": "string",
-                            "description": "Path to roots file (overrides auto-resolution). Auto-resolved from: $GIT_FLEET_ROOTS env var → ~/.config/git-fleet/roots → ~/.git-fleet-roots",
+                            "description": "Path to roots file; mutually exclusive with path (combining both is an error). When neither is given, auto-resolved from: $GIT_FLEET_ROOTS env var → ~/.config/git-fleet/roots → ~/.git-fleet-roots",
                         },
                         "json": {
                             "type": "boolean",
@@ -786,21 +786,31 @@ def get_tool_schema() -> dict:
             "--sequential, -s": "Run operations sequentially instead of parallel",
             "--jobs, -J": "Maximum number of repositories to process in parallel (sync)",
             "--dry-run, -n": "Preview operations without executing (available for pull/push/sync)",
-            "--roots, -r": "Path to roots file (overrides auto-resolution)",
+            "--roots, -r": "Path to roots file; mutually exclusive with path (see resolutionPrecedence)",
             "--include-no-remote": "Include repositories with no configured remotes (status/fetch/pull/push/sync/diff)",
             "--include-detached": "Include repositories with detached HEAD (status/fetch/pull/push/sync/diff)",
             "--all-remotes": "Fetch all remotes during sync instead of only upstream/origin",
             "--prune": "Prune deleted remote-tracking branches during sync fetch",
             "--dirty, -d": "Show only repositories not clean and in sync (status/sync; display-only filter, ignored with --json)",
         },
+        "resolutionPrecedence": {
+            "description": "How each command decides between single-root and multi-root mode; identical for all 9 commands",
+            "order": [
+                "--roots FILE given: multi-root mode using that file",
+                "path argument given (--roots not given): single-root mode on that path; roots file auto-resolution is skipped entirely",
+                "neither given, a roots file auto-resolves: multi-root mode",
+                "neither given, no roots file found: single-root mode on the current directory",
+            ],
+            "conflict": "path and --roots given together: 'Error: PATH argument and --roots cannot be used together', exit code 1",
+        },
         "rootsFileAutoResolution": {
-            "description": "When --roots is not specified, git-fleet automatically searches for a roots file",
+            "description": "When neither path nor --roots is given, git-fleet automatically searches for a roots file",
             "priority": [
                 "$GIT_FLEET_ROOTS environment variable (path to roots file)",
                 "~/.config/git-fleet/roots (XDG-compliant)",
                 "~/.git-fleet-roots (legacy fallback)",
             ],
-            "fallback": "If no roots file is found, operates on current directory or specified path (single-root mode)",
+            "fallback": "If no roots file is found, operates on current directory (single-root mode)",
         },
         "rootsFileFormat": {
             "description": "The roots file contains one repository root path per line",
@@ -816,7 +826,8 @@ def get_tool_schema() -> dict:
         "notes": [
             "All commands support --json for machine-readable output",
             "Parallel execution is the default for performance",
-            "Roots file is auto-resolved: $GIT_FLEET_ROOTS → ~/.config/git-fleet/roots → ~/.git-fleet-roots",
+            "Roots file is auto-resolved (when neither path nor --roots is given): $GIT_FLEET_ROOTS → ~/.config/git-fleet/roots → ~/.git-fleet-roots",
+            "An explicit path argument always overrides an auto-resolved roots file; path and --roots together is an error (see resolutionPrecedence)",
             "Smart pull (default) checks file-level overlap before skipping conflict-risk repos; use --safe for conservative mode or --force to skip all checks",
             "Use 'status --json' first to understand the current state before making changes",
             "Use 'who' to verify Git identity configuration before committing",

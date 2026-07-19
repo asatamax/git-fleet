@@ -1324,6 +1324,25 @@ def resolve_roots_file() -> Path | None:
     return None
 
 
+def resolve_effective_roots(path: Path | None, roots: Path | None, console: Console) -> Path | None:
+    """Resolve which roots file (if any) should drive multi-root mode.
+
+    Precedence: --roots wins outright; an explicit path argument forces
+    single-root mode (skipping roots-file auto-resolution entirely); with
+    neither given, fall back to auto-resolution; otherwise None (single-root
+    scan of the current directory).
+    """
+    if path is not None and roots is not None:
+        console.print("[red]Error: PATH argument and --roots cannot be used together[/]")
+        raise typer.Exit(1)
+
+    if roots is not None:
+        return roots
+    if path is not None:
+        return None
+    return resolve_roots_file()
+
+
 class MultiRootFleetManager:
     """Manage multiple Git repositories across multiple root directories."""
 
@@ -1616,7 +1635,7 @@ def _print_success_bullets(console: Console, results: list[OperationResult]) -> 
 def status(
     path: Path = typer.Argument(
         None,
-        help="Root path to scan for repositories",
+        help="Root path to scan for repositories (overrides configured roots file)",
     ),
     json_output: bool = typer.Option(
         False,
@@ -1661,7 +1680,7 @@ def status(
     """Show status of all repositories."""
     console, formatter = get_console_and_formatter(json_output)
 
-    resolved_roots = roots or resolve_roots_file()
+    resolved_roots = resolve_effective_roots(path, roots, console)
     if resolved_roots:
         # Multi-root mode
         root_paths = load_roots_file(resolved_roots)
@@ -1780,7 +1799,7 @@ def status(
 def fetch(
     path: Path = typer.Argument(
         None,
-        help="Root path to scan for repositories",
+        help="Root path to scan for repositories (overrides configured roots file)",
     ),
     json_output: bool = typer.Option(
         False,
@@ -1814,7 +1833,7 @@ def fetch(
     """Fetch all repositories."""
     console, formatter = get_console_and_formatter(json_output)
 
-    resolved_roots = roots or resolve_roots_file()
+    resolved_roots = resolve_effective_roots(path, roots, console)
     if resolved_roots:
         # Multi-root mode
         root_paths = load_roots_file(resolved_roots)
@@ -1868,7 +1887,7 @@ def fetch(
 def pull(
     path: Path = typer.Argument(
         None,
-        help="Root path to scan for repositories",
+        help="Root path to scan for repositories (overrides configured roots file)",
     ),
     json_output: bool = typer.Option(
         False,
@@ -1941,7 +1960,7 @@ def pull(
     else:
         mode = PullMode.SMART
 
-    resolved_roots = roots or resolve_roots_file()
+    resolved_roots = resolve_effective_roots(path, roots, console)
     if resolved_roots:
         # Multi-root mode
         root_paths = load_roots_file(resolved_roots)
@@ -2034,7 +2053,7 @@ def pull(
 def push(
     path: Path = typer.Argument(
         None,
-        help="Root path to scan for repositories",
+        help="Root path to scan for repositories (overrides configured roots file)",
     ),
     json_output: bool = typer.Option(
         False,
@@ -2080,7 +2099,7 @@ def push(
     """Push repositories that are ahead of remote."""
     console, formatter = get_console_and_formatter(json_output)
 
-    resolved_roots = roots or resolve_roots_file()
+    resolved_roots = resolve_effective_roots(path, roots, console)
     if resolved_roots:
         # Multi-root mode
         root_paths = load_roots_file(resolved_roots)
@@ -2149,7 +2168,7 @@ def push(
 def sync(
     path: Path = typer.Argument(
         None,
-        help="Root path to scan for repositories",
+        help="Root path to scan for repositories (overrides configured roots file)",
     ),
     json_output: bool = typer.Option(
         False,
@@ -2215,7 +2234,7 @@ def sync(
     """Sync all repositories: lightweight fetch, pull (smart), then push."""
     console, formatter = get_console_and_formatter(json_output)
 
-    resolved_roots = roots or resolve_roots_file()
+    resolved_roots = resolve_effective_roots(path, roots, console)
     if resolved_roots:
         # Multi-root mode
         root_paths = load_roots_file(resolved_roots)
@@ -2571,7 +2590,7 @@ def sync(
 def list_repos(
     path: Path = typer.Argument(
         None,
-        help="Root path to scan for repositories",
+        help="Root path to scan for repositories (overrides configured roots file)",
     ),
     json_output: bool = typer.Option(
         False,
@@ -2600,7 +2619,7 @@ def list_repos(
     """List all discovered repositories."""
     console, formatter = get_console_and_formatter(json_output)
 
-    resolved_roots = roots or resolve_roots_file()
+    resolved_roots = resolve_effective_roots(path, roots, console)
     if resolved_roots:
         # Multi-root mode
         root_paths = load_roots_file(resolved_roots)
@@ -2640,7 +2659,7 @@ def list_repos(
 def who(
     path: Path = typer.Argument(
         None,
-        help="Root path to scan for repositories",
+        help="Root path to scan for repositories (overrides configured roots file)",
     ),
     json_output: bool = typer.Option(
         False,
@@ -2665,7 +2684,7 @@ def who(
     console, formatter = get_console_and_formatter(json_output)
     global_identity = get_global_identity()
 
-    resolved_roots = roots or resolve_roots_file()
+    resolved_roots = resolve_effective_roots(path, roots, console)
     if resolved_roots:
         # Multi-root mode
         root_paths = load_roots_file(resolved_roots)
@@ -2711,7 +2730,7 @@ def who(
 def diff(
     path: Path = typer.Argument(
         None,
-        help="Root path to scan for repositories",
+        help="Root path to scan for repositories (overrides configured roots file)",
     ),
     json_output: bool = typer.Option(
         False,
@@ -2751,7 +2770,7 @@ def diff(
     """Show file-level changes (staged, unstaged, untracked) across repositories."""
     console, formatter = get_console_and_formatter(json_output)
 
-    resolved_roots = roots or resolve_roots_file()
+    resolved_roots = resolve_effective_roots(path, roots, console)
     if resolved_roots:
         root_paths = load_roots_file(resolved_roots)
         if not root_paths:
@@ -2809,7 +2828,7 @@ def diff(
 def remote(
     path: Path = typer.Argument(
         None,
-        help="Root path to scan for repositories",
+        help="Root path to scan for repositories (overrides configured roots file)",
     ),
     json_output: bool = typer.Option(
         False,
@@ -2833,7 +2852,7 @@ def remote(
     """Show remote URLs and protocols for all repositories."""
     console, formatter = get_console_and_formatter(json_output)
 
-    resolved_roots = roots or resolve_roots_file()
+    resolved_roots = resolve_effective_roots(path, roots, console)
     if resolved_roots:
         # Multi-root mode
         root_paths = load_roots_file(resolved_roots)

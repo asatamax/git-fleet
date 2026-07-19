@@ -66,18 +66,31 @@ EOF
 
 ### Auto-Resolution
 
-When `--roots` is not specified, git-fleet automatically looks for a roots file in this order:
+Every command resolves its roots in this order:
 
-1. `$GIT_FLEET_ROOTS` environment variable (path to roots file)
-2. `~/.config/git-fleet/roots` (XDG-compliant)
-3. `~/.git-fleet-roots` (legacy)
+1. `--roots FILE` given explicitly → multi-root mode using that file.
+2. `path` argument given explicitly → single-root ad-hoc scan of that path. Roots file
+   auto-resolution is skipped entirely, even if one is configured.
+3. Otherwise, git-fleet looks for a roots file in this order and, if found, activates
+   multi-root mode:
+   1. `$GIT_FLEET_ROOTS` environment variable (path to roots file)
+   2. `~/.config/git-fleet/roots` (XDG-compliant)
+   3. `~/.git-fleet-roots` (legacy)
+4. If none of the above apply, git-fleet scans the current directory (single-root mode).
 
-If a roots file is found, multi-root mode activates automatically:
+Passing both `path` and `--roots` is an error: `Error: PATH argument and --roots cannot be
+used together` (exit code 1).
 
 ```bash
 # These are equivalent (when ~/.config/git-fleet/roots exists)
 git-fleet status
 git-fleet status --roots ~/.config/git-fleet/roots
+
+# Even with a roots file configured, an explicit path scans only that tree
+git-fleet status ~/Development/oss
+
+# Ad-hoc scan of the current directory
+git-fleet status .
 
 # Override with explicit --roots
 git-fleet status --roots /path/to/other/roots
@@ -95,7 +108,7 @@ git-fleet status
 | `--sequential` | `-s` | Run operations sequentially instead of parallel |
 | `--jobs` | `-J` | Maximum number of repositories to process in parallel for sync |
 | `--dry-run` | `-n` | Preview operations without executing |
-| `--roots` | `-r` | Path to file containing repository root paths |
+| `--roots` | `-r` | Path to file containing repository root paths (mutually exclusive with `path`) |
 | `--no-fetch` | | Skip fetching before status check |
 | `--all` | `-a` | Pull/push all repositories, not just those needing it |
 | `--all-remotes` | | Fetch all remotes during sync instead of only upstream/origin |
