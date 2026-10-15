@@ -491,9 +491,8 @@ class GitOperations:
         try:
             result = self._run("symbolic-ref", "refs/remotes/origin/HEAD", check=False)
             if result.returncode == 0:
-                # Output: refs/remotes/origin/main -> extract "main"
-                ref = result.stdout.strip()
-                return ref.rsplit("/", 1)[-1]
+                # Output: refs/remotes/origin/main -> extract "main" (keeps "feature/x" intact)
+                return result.stdout.strip().removeprefix("refs/remotes/origin/")
         except Exception:
             pass
         # Fallback: check if main or master exists
