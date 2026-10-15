@@ -15,6 +15,7 @@ from rich.table import Table
 if TYPE_CHECKING:
     from .core import (
         FleetSummary,
+        FleetWorktreeSummary,
         GitRepository,
         GlobalIdentity,
         OperationResult,
@@ -22,8 +23,19 @@ if TYPE_CHECKING:
         RepositoryIdentity,
         RepositoryRemotes,
         RepositoryStatus,
+        RepositoryWorktrees,
         SyncOperationSummary,
+        WorktreeInfo,
     )
+
+
+def escape(text: str) -> str:
+    """Escape Rich markup so branch names, paths and git errors render literally."""
+    return text.replace("[", "\\[")
+
+
+def _plural(count: int, singular: str, plural: str | None = None) -> str:
+    return f"{count} {singular if count == 1 else plural or singular + 's'}"
 
 
 def compute_unique_root_names(roots: list[Path]) -> dict[Path, str]:
@@ -1586,3 +1598,242 @@ class OutputFormatter:
             "total_unstaged": sum(len(d.unstaged_files) for d in diffs),
             "total_untracked": sum(len(d.untracked_files) for d in diffs),
         }
+
+    def print_worktree_list(
+        self,
+        results: list[RepositoryWorktrees],
+        root_path: Path,
+        detail: bool = False,
+    ):
+        """Print linked worktree inventory for a single root."""
+        self._print_worktrees([(root_path, results)], multi_root=False, detail=detail)
+
+    def print_multi_root_worktree_list(
+        self,
+        all_results: list[tuple[Path, list[RepositoryWorktrees]]],
+        detail: bool = False,
+    ):
+        """Print linked worktree inventory for multiple roots."""
+        self._print_worktrees(all_results, multi_root=True, detail=detail)
+
+    def _print_worktrees(
+        self,
+        groups: list[tuple[Path, list[RepositoryWorktrees]]],
+        *,
+        multi_root: bool,
+        detail: bool,
+    ):
+        from .core import FleetWorktreeSummary, WorktreeUpstreamState
+
+        all_items = [r for _, results in groups for r in results]
+        summary = FleetWorktreeSummary.from_repositories(all_items)
+        root_names = compute_unique_root_names([root for root, _ in groups])
+
+        if self.use_json:
+            output: dict[str, Any]
+            if multi_root:
+                output = {
+                    "roots": [
+                        {
+                            "root": str(root),
+                            "root_name": root_names.get(root, root.name),
+                            "repositories": [r.to_dict() for r in results],
+                        }
+                        for root, results in groups
+                    ],
+                    "summary": summary.to_dict(),
+                }
+            else:
+                output = {
+                    "repositories": [r.to_dict() for r in all_items],
+                    "summary": summary.to_dict(),
+                }
+            # console.print would word-wrap long values and parse "[...]" as markup.
+            self.console.out(json.dumps(output, indent=2, default=str), highlight=False)
+            return
+
+        display_names = compute_unique_display_names(all_items)
+
+        if summary.repos_with_worktrees == 0:
+            repos = _plural(summary.repos, "repository", "repositories")
+            self.console.print(f"[green]No linked worktrees found in {repos}.[/]")
+        else:
+            if detail:
+                self._print_worktree_detail_tables(groups, display_names, root_names, multi_root)
+            else:
+                title = (
+                    f"Fleet Worktrees ({len(groups)} roots)"
+                    if multi_root
+                    else f"Fleet Worktrees: {escape(str(groups[0][0]))}"
+                )
+                self._print_worktree_summary_table(
+                    groups, display_names, root_names, multi_root, title
+                )
+            self.console.print()
+            self._print_worktree_footer(summary)
+
+            has_candidates = any(
+                w.upstream_state == WorktreeUpstreamState.GONE and w.dirty_count == 0
+                for r in all_items
+                for w in r.worktrees
+            )
+            if detail and has_candidates:
+                self.console.print(
+                    "[dim]Hint: clean worktrees whose upstream is gone are cleanup candidates"
+                    " (e.g. bonsai).[/]"
+                )
+
+        for r in all_items:
+            if r.error:
+                name = escape(display_names.get(r.path, r.name))
+                self.console.print(f"[red]✗ {name}: {escape(r.error)}[/]")
+
+    @staticmethod
+    def _format_worktree_count(count: int, color: str | None = None) -> str:
+        if count == 0:
+            return "[dim]0[/]"
+        return f"[{color}]{count}[/]" if color else str(count)
+
+    def _print_worktree_summary_table(
+        self,
+        groups: list[tuple[Path, list[RepositoryWorktrees]]],
+        display_names: dict[Path, str],
+        root_names: dict[Path, str],
+        multi_root: bool,
+        title: str,
+    ):
+        table = Table(title=title)
+        if multi_root:
+            table.add_column("Root", style="yellow", no_wrap=True)
+        table.add_column("Repository", style="cyan", no_wrap=True)
+        table.add_column("Total", justify="right")
+        table.add_column("Gone", justify="right")
+        table.add_column("No upstream", justify="right")
+        table.add_column("Detached", justify="right")
+        table.add_column("Missing", justify="right")
+        table.add_column("Dirty", justify="right")
+        table.add_column("Oldest", justify="right", no_wrap=True)
+
+        fmt = self._format_worktree_count
+        for root, results in groups:
+            for repo in results:
+                if not repo.worktrees:
+                    continue
+                s = repo.summary
+                repo_display = escape(display_names.get(repo.path, repo.name))
+                if s.gone >= 1:
+                    repo_display = f"[bold red]⚠ {repo_display}[/]"
+                row = [
+                    repo_display,
+                    fmt(s.total),
+                    fmt(s.gone, "red"),
+                    fmt(s.no_upstream),
+                    fmt(s.detached),
+                    fmt(s.missing, "red"),
+                    fmt(s.dirty, "yellow") + (f" [red](+{s.errors} error)[/]" if s.errors else ""),
+                    self._format_date(s.oldest_commit_date),
+                ]
+                if multi_root:
+                    row.insert(0, escape(root_names.get(root, root.name)))
+                table.add_row(*row)
+
+        self.console.print(table)
+
+    def _print_worktree_detail_tables(
+        self,
+        groups: list[tuple[Path, list[RepositoryWorktrees]]],
+        display_names: dict[Path, str],
+        root_names: dict[Path, str],
+        multi_root: bool,
+    ):
+        first = True
+        for root, results in groups:
+            for repo in results:
+                if not repo.worktrees:
+                    continue
+                if not first:
+                    self.console.print()
+                first = False
+
+                name = escape(display_names.get(repo.path, repo.name))
+                if multi_root:
+                    name = f"{name} ({escape(root_names.get(root, root.name))})"
+                if repo.summary.gone >= 1:
+                    name = f"[bold red]⚠ {name}[/]"
+                count = _plural(len(repo.worktrees), "linked worktree")
+                table = Table(title=f"{name} — {count}")
+                table.add_column("Worktree", style="cyan", overflow="fold")
+                table.add_column("Branch")
+                table.add_column("Upstream")
+                table.add_column("Tree", justify="center")
+                table.add_column("Last", justify="right", no_wrap=True)
+
+                ordered = sorted(
+                    repo.worktrees,
+                    key=lambda w: (
+                        w.last_commit_date is None,
+                        -w.last_commit_date.timestamp() if w.last_commit_date else 0.0,
+                    ),
+                )
+                for wt in ordered:
+                    table.add_row(
+                        escape(self._worktree_path_display(wt.path, repo.path)),
+                        escape(wt.branch) if wt.branch else "[dim](detached)[/]",
+                        self._worktree_upstream_display(wt),
+                        self._worktree_tree_display(wt),
+                        self._format_date(wt.last_commit_date),
+                    )
+                self.console.print(table)
+
+    @staticmethod
+    def _worktree_path_display(path: Path, repo_path: Path) -> str:
+        try:
+            return str(path.resolve().relative_to(repo_path.resolve()))
+        except ValueError:
+            pass
+        try:
+            return f"~/{path.relative_to(Path.home())}"
+        except ValueError:
+            return str(path)
+
+    @staticmethod
+    def _worktree_upstream_display(wt: WorktreeInfo) -> str:
+        from .core import WorktreeUpstreamState
+
+        colors = {
+            WorktreeUpstreamState.GONE: "red",
+            WorktreeUpstreamState.MISSING: "red",
+            WorktreeUpstreamState.NONE: "yellow",
+            WorktreeUpstreamState.ALIVE: "green",
+            WorktreeUpstreamState.DETACHED: "dim",
+        }
+        text = f"[{colors[wt.upstream_state]}]{wt.upstream_state.value}[/]"
+        return f"{text} 🔒" if wt.locked else text
+
+    @staticmethod
+    def _worktree_tree_display(wt: WorktreeInfo) -> str:
+        from .core import WorktreeUpstreamState
+
+        if wt.upstream_state == WorktreeUpstreamState.MISSING:
+            return "[dim]-[/]"
+        if wt.dirty_count is None:
+            return "[bold red]error[/]"
+        if wt.dirty_count == 0:
+            return "[green]clean[/]"
+        return f"[yellow]{_plural(wt.dirty_count, 'change')}[/]"
+
+    def _print_worktree_footer(self, summary: FleetWorktreeSummary):
+        hidden = summary.repos - summary.repos_with_worktrees
+        with_worktrees = f"{summary.repos_with_worktrees} with worktrees"
+        if hidden:
+            with_worktrees += f" [dim]({hidden} hidden)[/]"
+        gone = summary.worktrees.gone
+        parts = [
+            f"[bold]Total:[/] {_plural(summary.repos, 'repo')}",
+            with_worktrees,
+            _plural(summary.worktrees.total, "worktree"),
+            f"[red]Gone:[/] {gone}" if gone else f"Gone: {gone}",
+        ]
+        if summary.worktrees.errors:
+            parts.append(f"[red]✗ Status errors:[/] {summary.worktrees.errors}")
+        self.console.print(" | ".join(parts))

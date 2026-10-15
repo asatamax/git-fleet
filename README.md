@@ -46,7 +46,40 @@ git-fleet list ~/Development
 
 # Check Git identity (user.name/email) for all repos
 git-fleet who ~/Development
+
+# Inventory linked worktrees (read-only; finds stale ones)
+git-fleet worktrees ~/Development
 ```
+
+## Worktree Inventory
+
+`worktrees` lists the linked worktrees of every repository (the main worktree is excluded)
+so stale ones can be found. It never deletes anything.
+
+```bash
+# Summary: one row per repo that has linked worktrees (others are hidden)
+git-fleet worktrees
+
+# One table per repo with each worktree's branch, upstream state, tree and last commit
+git-fleet worktrees --detail
+
+# Fetch with prune first so upstreams deleted on the remote show as gone
+git-fleet worktrees --detail --fetch
+
+# Every repo (including those with zero worktrees), for scripts and AI agents
+git-fleet worktrees --json
+```
+
+| Upstream | Meaning |
+|----------|---------|
+| gone | Branch had an upstream that no longer exists (e.g. squash-merged PR) |
+| alive | Upstream exists |
+| none | Branch has no upstream configured |
+| detached | Worktree is on a detached HEAD |
+| missing | Worktree directory no longer exists (`git worktree prune` would remove it) |
+
+Clean worktrees whose upstream is `gone` are cleanup candidates. Without `--fetch`, no
+network access happens and upstream state reflects the last fetch.
 
 ## Multi-Root Support
 
@@ -115,6 +148,8 @@ git-fleet status
 | `--prune` | | Prune deleted remote-tracking branches during sync fetch |
 | `--force` | `-f` | Pull even if there's conflict risk |
 | `--paths` | `-p` | Output only paths (for piping to fzf etc.) |
+| `--detail` | | Per-worktree tables (`worktrees`) |
+| `--fetch` | | Fetch with prune before analysis (`worktrees`) |
 | `--schema` | | Output MCP-compatible tool schema for AI agents |
 
 ## Features
@@ -123,6 +158,7 @@ git-fleet status
 - **Fast routine sync**: `sync` fetches each repo's upstream/origin remote by default; use `--all-remotes --prune` for full remote maintenance
 - **Safety checks**: Pull skips diverged or dirty repositories unless `--force`
 - **Identity verification**: `who` command shows Git user.name/email configuration
+- **Worktree inventory**: `worktrees` command finds linked worktrees whose upstream is gone
 - **Multi-root support**: Manage repos across multiple directory trees
 - **AI-friendly**: JSON output and MCP-compatible schema for AI agents
 - **fzf integration**: `--paths` option for easy piping to fzf

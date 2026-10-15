@@ -806,6 +806,168 @@ def get_tool_schema() -> dict:
                     },
                 ],
             },
+            {
+                "name": "worktrees",
+                "description": "Read-only inventory of linked worktrees (main worktree excluded) across all repositories, to find stale worktrees. Each worktree gets an upstream_state: gone (upstream configured but [gone], e.g. squash-merged PR whose remote branch was deleted), alive, none (no upstream configured), detached, or missing (directory no longer exists; takes precedence). Like list/who/remote, shows all discovered repositories (no --include-no-remote/--include-detached). The table hides repositories with zero linked worktrees; --json includes every repository. No network access unless --fetch is given.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "Root path to scan for repositories; overrides an auto-resolved roots file (default: current directory)",
+                            "default": ".",
+                        },
+                        "roots": {
+                            "type": "string",
+                            "description": "Path to roots file; mutually exclusive with path (combining both is an error). When neither is given, auto-resolved from: $GIT_FLEET_ROOTS env var → ~/.config/git-fleet/roots → ~/.git-fleet-roots",
+                        },
+                        "detail": {
+                            "type": "boolean",
+                            "description": "Show one table per repository listing each linked worktree (path, branch, upstream state, tree state, last commit), newest first",
+                            "default": False,
+                        },
+                        "fetch": {
+                            "type": "boolean",
+                            "description": "Fetch all remotes with prune (repositories with remotes only) before analysis so [gone] upstreams are current",
+                            "default": False,
+                        },
+                        "json": {
+                            "type": "boolean",
+                            "description": "Output as JSON for machine parsing",
+                            "default": False,
+                        },
+                        "sequential": {
+                            "type": "boolean",
+                            "description": "Run sequentially instead of parallel",
+                            "default": False,
+                        },
+                    },
+                    "required": [],
+                },
+                "outputSchema": {
+                    "type": "object",
+                    "description": "Single-root mode: {repositories, summary}. Multi-root mode: {roots: [{root, root_name, repositories}], summary}",
+                    "properties": {
+                        "repositories": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "path": {"type": "string"},
+                                    "name": {"type": "string"},
+                                    "worktrees": {
+                                        "type": "array",
+                                        "items": {
+                                            "type": "object",
+                                            "properties": {
+                                                "path": {
+                                                    "type": "string",
+                                                    "description": "Absolute worktree path",
+                                                },
+                                                "branch": {
+                                                    "type": ["string", "null"],
+                                                    "description": "Branch name; null when detached",
+                                                },
+                                                "head": {
+                                                    "type": "string",
+                                                    "description": "Short HEAD sha (empty when unborn)",
+                                                },
+                                                "upstream_state": {
+                                                    "type": "string",
+                                                    "enum": [
+                                                        "gone",
+                                                        "alive",
+                                                        "none",
+                                                        "detached",
+                                                        "missing",
+                                                    ],
+                                                },
+                                                "locked": {"type": "boolean"},
+                                                "dirty_count": {
+                                                    "type": ["integer", "null"],
+                                                    "description": "Lines of git status --porcelain (0 when missing; null when git status failed, see error)",
+                                                },
+                                                "last_commit_date": {
+                                                    "type": ["string", "null"],
+                                                    "format": "date-time",
+                                                    "description": "Committer date of the worktree HEAD",
+                                                },
+                                                "external": {
+                                                    "type": "boolean",
+                                                    "description": "Worktree path is outside the repository root",
+                                                },
+                                                "error": {
+                                                    "type": "string",
+                                                    "description": "Non-empty when git status failed in this worktree (tree state unknown; never a cleanup candidate)",
+                                                },
+                                            },
+                                        },
+                                    },
+                                    "summary": {
+                                        "type": "object",
+                                        "properties": {
+                                            "total": {"type": "integer"},
+                                            "gone": {"type": "integer"},
+                                            "no_upstream": {"type": "integer"},
+                                            "detached": {"type": "integer"},
+                                            "missing": {"type": "integer"},
+                                            "dirty": {
+                                                "type": "integer",
+                                                "description": "Worktrees with dirty_count > 0",
+                                            },
+                                            "errors": {
+                                                "type": "integer",
+                                                "description": "Worktrees whose git status failed (dirty_count null)",
+                                            },
+                                            "oldest_commit_date": {
+                                                "type": ["string", "null"],
+                                                "format": "date-time",
+                                            },
+                                        },
+                                    },
+                                    "error": {
+                                        "type": "string",
+                                        "description": "Non-empty when the worktree listing failed",
+                                    },
+                                },
+                            },
+                        },
+                        "summary": {
+                            "type": "object",
+                            "description": "Fleet-wide counts; same worktree counters as the per-repository summary plus repository counts",
+                            "properties": {
+                                "repos": {"type": "integer"},
+                                "repos_with_worktrees": {"type": "integer"},
+                                "total": {"type": "integer"},
+                                "gone": {"type": "integer"},
+                                "no_upstream": {"type": "integer"},
+                                "detached": {"type": "integer"},
+                                "missing": {"type": "integer"},
+                                "dirty": {"type": "integer"},
+                                "errors": {"type": "integer"},
+                                "oldest_commit_date": {
+                                    "type": ["string", "null"],
+                                    "format": "date-time",
+                                },
+                            },
+                        },
+                    },
+                },
+                "examples": [
+                    {
+                        "description": "Summary of repositories that have linked worktrees",
+                        "command": "git-fleet worktrees",
+                    },
+                    {
+                        "description": "Per-worktree detail after refreshing upstream state",
+                        "command": "git-fleet worktrees ~/Development --detail --fetch",
+                    },
+                    {
+                        "description": "Find cleanup candidates (clean worktrees whose upstream is gone)",
+                        "command": "git-fleet worktrees --json",
+                    },
+                ],
+            },
         ],
         "globalOptions": {
             "--json, -j": "Output in JSON format (recommended for AI agents)",
@@ -819,9 +981,11 @@ def get_tool_schema() -> dict:
             "--prune": "Prune deleted remote-tracking branches during sync fetch",
             "--dirty, -d": "Show only repositories not clean and in sync (status/sync; display-only filter, ignored with --json)",
             "--off-default, -o": "Show only repositories on a non-default branch (status/sync; OR-combined with --dirty; display-only filter, ignored with --json)",
+            "--detail": "Show one table per repository with each linked worktree (worktrees)",
+            "--fetch": "Fetch all remotes with prune before analysis (worktrees; no network access without it)",
         },
         "resolutionPrecedence": {
-            "description": "How each command decides between single-root and multi-root mode; identical for all 9 commands",
+            "description": "How each command decides between single-root and multi-root mode; identical for all 10 commands",
             "order": [
                 "--roots FILE given: multi-root mode using that file",
                 "path argument given (--roots not given): single-root mode on that path; roots file auto-resolution is skipped entirely",
@@ -859,6 +1023,7 @@ def get_tool_schema() -> dict:
             "Use 'status --json' first to understand the current state before making changes",
             "Use 'who' to verify Git identity configuration before committing",
             "Use 'remote --json' or 'list --remote --json' to get remote URLs and protocols",
+            "Use 'worktrees --json' to find stale linked worktrees; clean worktrees whose upstream_state is 'gone' are cleanup candidates (worktrees never deletes anything)",
             "Sync commands exclude no-remote and detached HEAD repos by default; use --include-no-remote and --include-detached to include them",
             "Operations that encounter case-insensitive filesystem ref conflicts (macOS) are automatically recovered and reported as warnings in JSON output (warning field in results, warned count in summary)",
         ],

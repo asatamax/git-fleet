@@ -16,7 +16,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 import typer
 from rich.console import Console
@@ -29,7 +29,7 @@ from rich.progress import (
 )
 
 from ._version import __version__
-from .formatters import OutputFormatter, StatusFilter
+from .formatters import OutputFormatter, StatusFilter, escape
 from .schema import get_tool_schema
 
 # =============================================================================
@@ -336,6 +336,129 @@ class RepositoryDiff:
             "staged_count": len(self.staged_files),
             "unstaged_count": len(self.unstaged_files),
             "untracked_count": len(self.untracked_files),
+        }
+
+
+class WorktreeUpstreamState(StrEnum):
+    """Upstream state of a linked worktree's branch."""
+
+    GONE = "gone"
+    ALIVE = "alive"
+    NONE = "none"
+    DETACHED = "detached"
+    MISSING = "missing"
+
+
+@dataclass
+class WorktreeInfo:
+    """A linked worktree (the main worktree is never represented)."""
+
+    path: Path
+    branch: str | None
+    head: str
+    upstream_state: WorktreeUpstreamState
+    locked: bool = False
+    dirty_count: int | None = 0
+    last_commit_date: datetime | None = None
+    external: bool = False
+    error: str = ""
+
+    def to_dict(self) -> dict:
+        return {
+            "path": str(self.path),
+            "branch": self.branch,
+            "head": self.head,
+            "upstream_state": self.upstream_state.value,
+            "locked": self.locked,
+            "dirty_count": self.dirty_count,
+            "last_commit_date": (
+                self.last_commit_date.isoformat() if self.last_commit_date else None
+            ),
+            "external": self.external,
+            "error": self.error,
+        }
+
+
+@dataclass
+class WorktreeSummary:
+    """Counts over a set of linked worktrees."""
+
+    total: int = 0
+    gone: int = 0
+    no_upstream: int = 0
+    detached: int = 0
+    missing: int = 0
+    dirty: int = 0
+    errors: int = 0
+    oldest_commit_date: datetime | None = None
+
+    @classmethod
+    def from_worktrees(cls, worktrees: list[WorktreeInfo]) -> WorktreeSummary:
+        states = [w.upstream_state for w in worktrees]
+        dates = [w.last_commit_date for w in worktrees if w.last_commit_date is not None]
+        return cls(
+            total=len(worktrees),
+            gone=states.count(WorktreeUpstreamState.GONE),
+            no_upstream=states.count(WorktreeUpstreamState.NONE),
+            detached=states.count(WorktreeUpstreamState.DETACHED),
+            missing=states.count(WorktreeUpstreamState.MISSING),
+            dirty=sum(1 for w in worktrees if w.dirty_count),
+            errors=sum(1 for w in worktrees if w.dirty_count is None),
+            oldest_commit_date=min(dates) if dates else None,
+        )
+
+    def to_dict(self) -> dict:
+        d = asdict(self)
+        d["oldest_commit_date"] = (
+            self.oldest_commit_date.isoformat() if self.oldest_commit_date else None
+        )
+        return d
+
+
+@dataclass
+class RepositoryWorktrees:
+    """Linked worktrees of a single repository."""
+
+    path: Path
+    name: str
+    worktrees: list[WorktreeInfo] = field(default_factory=list)
+    error: str = ""
+
+    @property
+    def summary(self) -> WorktreeSummary:
+        return WorktreeSummary.from_worktrees(self.worktrees)
+
+    def to_dict(self) -> dict:
+        return {
+            "path": str(self.path),
+            "name": self.name,
+            "worktrees": [w.to_dict() for w in self.worktrees],
+            "summary": self.summary.to_dict(),
+            "error": self.error,
+        }
+
+
+@dataclass
+class FleetWorktreeSummary:
+    """Fleet-wide worktree counts."""
+
+    repos: int = 0
+    repos_with_worktrees: int = 0
+    worktrees: WorktreeSummary = field(default_factory=WorktreeSummary)
+
+    @classmethod
+    def from_repositories(cls, repos: list[RepositoryWorktrees]) -> FleetWorktreeSummary:
+        return cls(
+            repos=len(repos),
+            repos_with_worktrees=sum(1 for r in repos if r.worktrees),
+            worktrees=WorktreeSummary.from_worktrees([w for r in repos for w in r.worktrees]),
+        )
+
+    def to_dict(self) -> dict:
+        return {
+            "repos": self.repos,
+            "repos_with_worktrees": self.repos_with_worktrees,
+            **self.worktrees.to_dict(),
         }
 
 
@@ -809,6 +932,100 @@ class GitOperations:
             pass
         return remotes
 
+    def list_worktrees(self) -> list[dict[str, Any]]:
+        """Parse `git worktree list --porcelain -z` (first entry is the main worktree)."""
+        # -z keeps paths containing newlines/tabs/quotes verbatim instead of C-quoted.
+        result = self._run("worktree", "list", "--porcelain", "-z", check=False)
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.strip() or "git worktree list failed")
+
+        entries: list[dict[str, Any]] = []
+        current: dict[str, Any] | None = None
+        for field_text in result.stdout.split("\0"):
+            if not field_text:
+                current = None
+                continue
+            key, _, value = field_text.partition(" ")
+            if key == "worktree":
+                current = {
+                    "path": value,
+                    "head": "",
+                    "branch": None,
+                    "locked": False,
+                    "prunable": False,
+                }
+                entries.append(current)
+            elif current is None:
+                continue
+            elif key == "HEAD":
+                current["head"] = value
+            elif key == "branch":
+                current["branch"] = value
+            elif key == "locked":
+                current["locked"] = True
+            elif key == "prunable":
+                current["prunable"] = True
+        return entries
+
+    def get_branch_upstream_states(self) -> dict[str, WorktreeUpstreamState]:
+        """Map each local branch ref (refs/heads/...) to its upstream state."""
+        result = self._run(
+            "for-each-ref",
+            "--format=%(refname)%09%(upstream)%09%(upstream:track)",
+            "refs/heads",
+            check=False,
+        )
+        states: dict[str, WorktreeUpstreamState] = {}
+        if result.returncode != 0:
+            return states
+        for line in result.stdout.splitlines():
+            refname, _, rest = line.partition("\t")
+            upstream, _, track = rest.partition("\t")
+            if track == "[gone]":
+                states[refname] = WorktreeUpstreamState.GONE
+            elif upstream:
+                states[refname] = WorktreeUpstreamState.ALIVE
+            else:
+                states[refname] = WorktreeUpstreamState.NONE
+        return states
+
+    def get_commit_infos(self, shas: list[str]) -> dict[str, tuple[str, datetime | None]]:
+        """Map full commit SHAs to (short sha, committer date) in one git call."""
+        if not shas:
+            return {}
+
+        def parse(stdout: str) -> dict[str, tuple[str, datetime | None]]:
+            infos: dict[str, tuple[str, datetime | None]] = {}
+            for line in stdout.splitlines():
+                parts = line.split("\t")
+                if len(parts) == 3:
+                    infos[parts[0]] = (parts[1], datetime.fromisoformat(parts[2]))
+            return infos
+
+        fmt = "--format=%H%x09%h%x09%cI"
+        result = self._run("log", "--no-walk=unsorted", fmt, *shas, check=False)
+        if result.returncode == 0:
+            return parse(result.stdout)
+
+        # One unknown object (e.g. gc'd HEAD of a missing worktree) fails the batch.
+        infos: dict[str, tuple[str, datetime | None]] = {}
+        for sha in shas:
+            single = self._run("log", "--no-walk", fmt, sha, check=False)
+            if single.returncode == 0:
+                infos.update(parse(single.stdout))
+        return infos
+
+    def count_status_lines(self) -> tuple[int | None, str]:
+        """Count `git status --porcelain` lines; returns (None, error) on failure."""
+        # Without --no-optional-locks, status may refresh and rewrite the index (index.lock).
+        try:
+            result = self._run("--no-optional-locks", "status", "--porcelain", check=False)
+        except Exception as e:
+            return None, str(e)
+        if result.returncode != 0:
+            return None, result.stderr.strip() or f"git status exited {result.returncode}"
+        return len(result.stdout.splitlines()), ""
+
     @staticmethod
     def _detect_protocol(url: str) -> str:
         """Detect protocol from Git URL."""
@@ -983,6 +1200,60 @@ class GitRepository:
             untracked_files=self.ops.get_untracked_files(),
         )
 
+    def get_worktrees(self, max_status_workers: int = 1) -> RepositoryWorktrees:
+        """Inventory linked worktrees (main worktree excluded)."""
+        result = RepositoryWorktrees(path=self.path, name=self.name)
+        try:
+            entries = self.ops.list_worktrees()[1:]
+            if not entries:
+                return result
+
+            upstream_states = self.ops.get_branch_upstream_states()
+            shas = sorted({e["head"] for e in entries if e["head"].strip("0")})
+            commit_infos = self.ops.get_commit_infos(shas)
+            repo_root = self.path.resolve()
+
+            for entry in entries:
+                wt_path = Path(entry["path"])
+                ref: str | None = entry["branch"]
+                # Locked worktrees are never reported prunable, so check the directory too.
+                missing = entry["prunable"] or not wt_path.is_dir()
+
+                if missing:
+                    state = WorktreeUpstreamState.MISSING
+                elif ref is None:
+                    state = WorktreeUpstreamState.DETACHED
+                else:
+                    state = upstream_states.get(ref, WorktreeUpstreamState.NONE)
+
+                head = entry["head"]
+                short_sha, commit_date = commit_infos.get(head, (head[:7], None))
+                result.worktrees.append(
+                    WorktreeInfo(
+                        path=wt_path,
+                        branch=ref.removeprefix("refs/heads/") if ref else None,
+                        head=short_sha if head.strip("0") else "",
+                        upstream_state=state,
+                        locked=entry["locked"],
+                        dirty_count=0,
+                        last_commit_date=commit_date,
+                        external=not wt_path.resolve().is_relative_to(repo_root),
+                    )
+                )
+
+            # One repo can hold dozens of worktrees; serial `git status` dominates runtime.
+            present = [
+                w for w in result.worktrees if w.upstream_state != WorktreeUpstreamState.MISSING
+            ]
+            with ThreadPoolExecutor(max_workers=max(1, max_status_workers)) as executor:
+                counts = executor.map(lambda w: GitOperations(w.path).count_status_lines(), present)
+                for wt, (count, error) in zip(present, counts):
+                    wt.dirty_count = count
+                    wt.error = error
+        except Exception as e:
+            result.error = str(e)
+        return result
+
 
 # =============================================================================
 # Fleet Manager
@@ -1078,10 +1349,12 @@ class FleetManager:
         *,
         all_remotes: bool = True,
         prune: bool = True,
+        repos: list[GitRepository] | None = None,
     ) -> list[OperationResult]:
-        """Fetch all repositories."""
+        """Fetch all repositories (or only ``repos`` when given)."""
         return self._execute_parallel(
             lambda repo: repo.fetch(all_remotes=all_remotes, prune=prune),
+            repos=repos,
             sequential=sequential,
             on_repo_done=on_repo_done,
         )
@@ -1256,6 +1529,19 @@ class FleetManager:
             results = [r for r in results if r.is_dirty]
         return results
 
+    def get_all_worktrees(
+        self,
+        sequential: bool = False,
+        on_repo_done: Callable[[], None] | None = None,
+    ) -> list[RepositoryWorktrees]:
+        """Get linked worktrees for all repositories."""
+        status_workers = 1 if sequential else self.max_workers
+        return self._execute_parallel(
+            lambda repo: repo.get_worktrees(max_status_workers=status_workers),
+            sequential=sequential,
+            on_repo_done=on_repo_done,
+        )
+
 
 def get_global_identity() -> GlobalIdentity:
     """Get global Git identity configuration."""
@@ -1378,11 +1664,11 @@ class MultiRootFleetManager:
         *,
         sequential: bool = False,
         on_repo_done: Callable[[], None] | None = None,
+        root_repos: list[tuple[Path, list[GitRepository]]] | None = None,
     ) -> list[tuple[Path, list[Any]]]:
         """Execute a repository operation across all roots with one worker pool."""
-        root_repos = [
-            (root, fleet.discover_repositories()) for root, fleet in self._fleet_managers.items()
-        ]
+        if root_repos is None:
+            root_repos = self.discover_all_repositories()
         results_by_root: dict[Path, list[Any]] = {root: [] for root, _ in root_repos}
 
         if sequential:
@@ -1475,10 +1761,25 @@ class MultiRootFleetManager:
         *,
         all_remotes: bool = True,
         prune: bool = True,
+        root_repos: list[tuple[Path, list[GitRepository]]] | None = None,
     ) -> list[tuple[Path, list[OperationResult]]]:
-        """Fetch all repositories across all roots."""
+        """Fetch all repositories across all roots (or only ``root_repos`` when given)."""
         return self._execute_repo_operation_across_roots(
             lambda repo: repo.fetch(all_remotes=all_remotes, prune=prune),
+            sequential=sequential,
+            on_repo_done=on_repo_done,
+            root_repos=root_repos,
+        )
+
+    def get_all_worktrees(
+        self,
+        sequential: bool = False,
+        on_repo_done: Callable[[], None] | None = None,
+    ) -> list[tuple[Path, list[RepositoryWorktrees]]]:
+        """Get linked worktrees for all repositories across all roots."""
+        status_workers = 1 if sequential else self.max_workers
+        return self._execute_repo_operation_across_roots(
+            lambda repo: repo.get_worktrees(max_status_workers=status_workers),
             sequential=sequential,
             on_repo_done=on_repo_done,
         )
@@ -2920,3 +3221,135 @@ def remote(
             remotes = fleet.get_all_remotes(sequential=sequential)
 
         formatter.print_remote_list(remotes, target_path.resolve())
+
+
+_T = TypeVar("_T")
+
+
+def _run_with_progress(
+    console: Console,
+    show: bool,
+    description: str,
+    total: int,
+    run: Callable[[Callable[[], None] | None], _T],
+) -> _T:
+    """Run ``run(on_repo_done)`` under its own progress bar when ``show`` is set."""
+    if not show:
+        return run(None)
+    with _create_progress_bar(console) as progress:
+        task = progress.add_task(description, total=total)
+        return run(lambda: progress.advance(task))
+
+
+def _print_fetch_results(console: Console, results: list[OperationResult]) -> None:
+    """Print the fetch result line plus failures/warnings (same layout as `status`)."""
+    success = sum(1 for r in results if r.success)
+    console.print(f"  Fetched {success}/{len(results)} repositories")
+    for r in results:
+        if not r.success:
+            console.print(f"    [red]✗ {escape(r.name)}: {escape(r.error)}[/]")
+    for r in results:
+        if r.success and r.warning:
+            console.print(f"    [yellow]⚠ {escape(r.name)}: {escape(r.warning)}[/]")
+    console.print()
+
+
+@app.command()
+def worktrees(
+    path: Path = typer.Argument(
+        None,
+        help="Root path to scan for repositories (overrides configured roots file)",
+    ),
+    roots: Path = typer.Option(
+        None,
+        "--roots",
+        "-r",
+        help="File containing repository root paths (one per line)",
+    ),
+    detail: bool = typer.Option(
+        False,
+        "--detail",
+        help="Show one table per repository listing each linked worktree",
+    ),
+    fetch_first: bool = typer.Option(
+        False,
+        "--fetch",
+        help="Fetch (with prune) repositories with remotes first so gone upstreams are current",
+    ),
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        "-j",
+        help="Output as JSON",
+    ),
+    sequential: bool = typer.Option(
+        False,
+        "--sequential",
+        "-s",
+        help="Run sequentially instead of parallel",
+    ),
+):
+    """Show linked worktrees per repository (read-only inventory of cleanup candidates)."""
+    console, formatter = get_console_and_formatter(json_output)
+    show_progress = not json_output
+
+    resolved_roots = resolve_effective_roots(path, roots, console)
+    if resolved_roots:
+        root_paths = load_roots_file(resolved_roots)
+        if not root_paths:
+            console.print(f"[red]Error: No valid roots found in {resolved_roots}[/]")
+            raise typer.Exit(1)
+
+        multi_fleet = MultiRootFleetManager(root_paths)
+        all_repos = multi_fleet.discover_all_repositories()
+        total = sum(len(repos) for _, repos in all_repos)
+
+        if fetch_first:
+            fetchable = [(root, [r for r in repos if r.has_remotes()]) for root, repos in all_repos]
+            fetch_results = _run_with_progress(
+                console,
+                show_progress,
+                "Fetching...",
+                sum(len(repos) for _, repos in fetchable),
+                lambda done: multi_fleet.fetch_all(
+                    sequential=sequential, on_repo_done=done, root_repos=fetchable
+                ),
+            )
+            if show_progress:
+                _print_fetch_results(console, [r for _, results in fetch_results for r in results])
+
+        all_worktrees = _run_with_progress(
+            console,
+            show_progress,
+            "Analyzing...",
+            total,
+            lambda done: multi_fleet.get_all_worktrees(sequential=sequential, on_repo_done=done),
+        )
+        formatter.print_multi_root_worktree_list(all_worktrees, detail=detail)
+    else:
+        target_path = path if path else Path(".")
+        fleet = FleetManager(target_path)
+        repos = fleet.discover_repositories()
+
+        if fetch_first:
+            fetchable_repos = [r for r in repos if r.has_remotes()]
+            single_fetch_results = _run_with_progress(
+                console,
+                show_progress,
+                "Fetching...",
+                len(fetchable_repos),
+                lambda done: fleet.fetch_all(
+                    sequential=sequential, on_repo_done=done, repos=fetchable_repos
+                ),
+            )
+            if show_progress:
+                _print_fetch_results(console, single_fetch_results)
+
+        repo_worktrees = _run_with_progress(
+            console,
+            show_progress,
+            "Analyzing...",
+            len(repos),
+            lambda done: fleet.get_all_worktrees(sequential=sequential, on_repo_done=done),
+        )
+        formatter.print_worktree_list(repo_worktrees, target_path.resolve(), detail=detail)
