@@ -58,6 +58,11 @@ def get_tool_schema() -> dict:
                             "description": "Show only repositories that are not clean and in sync (display filter for the rendered table; ignored when --json is set so machine consumers always receive the full repository list)",
                             "default": False,
                         },
+                        "off_default": {
+                            "type": "boolean",
+                            "description": "Show only repositories whose HEAD is on a branch other than the default branch (origin/HEAD, falling back to main/master); OR-combined with --dirty. Display filter; ignored when --json is set (use the off_default_branch field instead)",
+                            "default": False,
+                        },
                     },
                     "required": [],
                 },
@@ -72,6 +77,14 @@ def get_tool_schema() -> dict:
                                     "path": {"type": "string"},
                                     "name": {"type": "string"},
                                     "branch": {"type": "string"},
+                                    "default_branch": {
+                                        "type": "string",
+                                        "description": "Empty when it cannot be determined",
+                                    },
+                                    "off_default_branch": {
+                                        "type": "boolean",
+                                        "description": "True when branch differs from a known default_branch",
+                                    },
                                     "sync_status": {
                                         "type": "string",
                                         "enum": [
@@ -132,6 +145,10 @@ def get_tool_schema() -> dict:
                     {
                         "description": "Only show repositories that need attention (clean rows hidden in the table)",
                         "command": "git-fleet status --dirty",
+                    },
+                    {
+                        "description": "Show repos needing attention or left on a non-default branch",
+                        "command": "git-fleet status --dirty --off-default",
                     },
                 ],
             },
@@ -574,6 +591,11 @@ def get_tool_schema() -> dict:
                             "description": "Show only repositories that are not clean and in sync in the final status table (display filter; ignored when --json is set so machine consumers always receive the full repository list)",
                             "default": False,
                         },
+                        "off_default": {
+                            "type": "boolean",
+                            "description": "Show only repositories whose HEAD is on a branch other than the default branch (origin/HEAD, falling back to main/master); OR-combined with --dirty. Display filter; ignored when --json is set (use the off_default_branch field instead)",
+                            "default": False,
+                        },
                     },
                     "required": [],
                 },
@@ -589,6 +611,10 @@ def get_tool_schema() -> dict:
                     {
                         "description": "Sync everything, then show only repos still needing attention",
                         "command": "git-fleet sync --dirty",
+                    },
+                    {
+                        "description": "Sync everything, then show repos needing attention or off the default branch",
+                        "command": "git-fleet sync -d -o",
                     },
                     {
                         "description": "Sync with explicit full remote maintenance",
@@ -792,6 +818,7 @@ def get_tool_schema() -> dict:
             "--all-remotes": "Fetch all remotes during sync instead of only upstream/origin",
             "--prune": "Prune deleted remote-tracking branches during sync fetch",
             "--dirty, -d": "Show only repositories not clean and in sync (status/sync; display-only filter, ignored with --json)",
+            "--off-default, -o": "Show only repositories on a non-default branch (status/sync; OR-combined with --dirty; display-only filter, ignored with --json)",
         },
         "resolutionPrecedence": {
             "description": "How each command decides between single-root and multi-root mode; identical for all 9 commands",

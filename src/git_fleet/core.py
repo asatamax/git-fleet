@@ -29,7 +29,7 @@ from rich.progress import (
 )
 
 from ._version import __version__
-from .formatters import OutputFormatter
+from .formatters import OutputFormatter, StatusFilter
 from .schema import get_tool_schema
 
 # =============================================================================
@@ -106,6 +106,11 @@ class RepositoryStatus:
         return self.sync_status == SyncStatus.DIVERGED
 
     @property
+    def is_off_default_branch(self) -> bool:
+        """Check if HEAD is on a branch other than the default (unknown default counts as on)."""
+        return bool(self.default_branch) and self.branch != self.default_branch
+
+    @property
     def has_conflict_risk(self) -> bool:
         """Check if there's a risk of conflict (diverged or dirty + behind)."""
         if self.is_diverged:
@@ -120,6 +125,8 @@ class RepositoryStatus:
             "path": str(self.path),
             "name": self.name,
             "branch": self.branch,
+            "default_branch": self.default_branch,
+            "off_default_branch": self.is_off_default_branch,
             "remote_branch": self.remote_branch,
             "sync_status": self.sync_status.value,
             "ahead_count": self.ahead_count,
@@ -1675,9 +1682,19 @@ def status(
         "-d",
         help=("Show only repositories not clean and in sync (display filter; ignored with --json)"),
     ),
+    off_default: bool = typer.Option(
+        False,
+        "--off-default",
+        "-o",
+        help=(
+            "Show only repositories on a branch other than the default branch; "
+            "OR-combined with --dirty (display filter; ignored with --json)"
+        ),
+    ),
 ):
     """Show status of all repositories."""
     console, formatter = get_console_and_formatter(json_output)
+    status_filter = StatusFilter(dirty=dirty_only, off_default=off_default)
 
     resolved_roots = resolve_effective_roots(path, roots, console)
     if resolved_roots:
@@ -1734,7 +1751,7 @@ def status(
             all_statuses = multi_fleet.get_all_status(fetch_first=False, sequential=sequential)
 
         summary = multi_fleet.get_summary(all_statuses)
-        formatter.print_multi_root_status_list(all_statuses, summary, dirty_only=dirty_only)
+        formatter.print_multi_root_status_list(all_statuses, summary, status_filter=status_filter)
     else:
         # Single root mode
         target_path = path if path else Path(".")
@@ -1791,7 +1808,9 @@ def status(
             )
 
         summary = fleet.get_summary(statuses)
-        formatter.print_status_list(statuses, summary, target_path.resolve(), dirty_only=dirty_only)
+        formatter.print_status_list(
+            statuses, summary, target_path.resolve(), status_filter=status_filter
+        )
 
 
 @app.command()
@@ -2229,9 +2248,19 @@ def sync(
             "(display filter; ignored with --json)"
         ),
     ),
+    off_default: bool = typer.Option(
+        False,
+        "--off-default",
+        "-o",
+        help=(
+            "Show only repositories on a branch other than the default branch; "
+            "OR-combined with --dirty (display filter; ignored with --json)"
+        ),
+    ),
 ):
     """Sync all repositories: lightweight fetch, pull (smart), then push."""
     console, formatter = get_console_and_formatter(json_output)
+    status_filter = StatusFilter(dirty=dirty_only, off_default=off_default)
 
     resolved_roots = resolve_effective_roots(path, roots, console)
     if resolved_roots:
@@ -2389,7 +2418,7 @@ def sync(
                 fetch_results, pull_results, push_results
             )
             formatter.print_multi_root_status_list(
-                all_statuses, summary, sync_summary, dirty_only=dirty_only
+                all_statuses, summary, sync_summary, status_filter=status_filter
             )
 
             if summary.conflict_risk > 0:
@@ -2562,7 +2591,7 @@ def sync(
         summary = fleet.get_summary(statuses)
         sync_summary = SyncOperationSummary.from_results(fetch_results, pull_results, push_results)
         formatter.print_status_list(
-            statuses, summary, target_path.resolve(), sync_summary, dirty_only=dirty_only
+            statuses, summary, target_path.resolve(), sync_summary, status_filter=status_filter
         )
 
         if summary.conflict_risk > 0:

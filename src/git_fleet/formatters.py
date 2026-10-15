@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections import defaultdict
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -117,6 +118,38 @@ def is_dirty_status(status: RepositoryStatus) -> bool:
     )
 
 
+@dataclass(frozen=True)
+class StatusFilter:
+    """Display filter for status tables; enabled conditions are OR-combined."""
+
+    dirty: bool = False
+    off_default: bool = False
+
+    @property
+    def active(self) -> bool:
+        return self.dirty or self.off_default
+
+    def matches(self, status: RepositoryStatus) -> bool:
+        if not self.active:
+            return True
+        return (self.dirty and is_dirty_status(status)) or (
+            self.off_default and status.is_off_default_branch
+        )
+
+    @property
+    def flags(self) -> str:
+        names = [("--dirty", self.dirty), ("--off-default", self.off_default)]
+        return "/".join(name for name, enabled in names if enabled)
+
+    def empty_message(self, total: int) -> str:
+        conditions = []
+        if self.dirty:
+            conditions.append("clean and in sync")
+        if self.off_default:
+            conditions.append("on the default branch")
+        return f"All {total} repositories are {' and '.join(conditions)}."
+
+
 def _make_paths_unique(paths: list[Path]) -> list[str]:
     """Generate shortest unique display names for a list of paths.
 
@@ -172,19 +205,19 @@ class OutputFormatter:
         summary: FleetSummary,
         root_path: Path,
         sync_summary: SyncOperationSummary | None = None,
-        dirty_only: bool = False,
+        status_filter: StatusFilter = StatusFilter(),
     ):
         """Print status list.
 
         Args:
-            dirty_only: When True, hide repositories that are clean AND in sync
-                from the rendered table. Ignored when use_json is True so machine
-                consumers always receive complete data.
+            status_filter: Hides non-matching repositories from the rendered table.
+                Ignored when use_json is True so machine consumers always receive
+                complete data.
         """
         if self.use_json:
             self._print_status_json(statuses, summary)
         else:
-            self._print_status_table(statuses, summary, root_path, sync_summary, dirty_only)
+            self._print_status_table(statuses, summary, root_path, sync_summary, status_filter)
 
     def _get_relative_path(self, path: Path, root: Path) -> str:
         """Get relative path from root."""
@@ -199,14 +232,14 @@ class OutputFormatter:
         summary: FleetSummary,
         root_path: Path,
         sync_summary: SyncOperationSummary | None = None,
-        dirty_only: bool = False,
+        status_filter: StatusFilter = StatusFilter(),
     ):
         """Print rich table output."""
         # Compute unique display names for duplicate repo names
         # (use the full status list so names stay stable when filtering)
         display_names = compute_unique_display_names(statuses)
 
-        visible_statuses = [s for s in statuses if is_dirty_status(s)] if dirty_only else statuses
+        visible_statuses = [s for s in statuses if status_filter.matches(s)]
         hidden_count = len(statuses) - len(visible_statuses)
 
         table = Table(title=f"Fleet Status: {root_path}")
@@ -237,12 +270,12 @@ class OutputFormatter:
 
             table.add_row(repo_display, branch_display, sync_icon, wt_status, last_commit)
 
-        if dirty_only and not visible_statuses:
-            self.console.print(f"[green]All {len(statuses)} repositories are clean and in sync.[/]")
+        if status_filter.active and not visible_statuses:
+            self.console.print(f"[green]{status_filter.empty_message(len(statuses))}[/]")
         else:
             self.console.print(table)
         self.console.print()
-        self._print_summary_table(summary, sync_summary, hidden_count=hidden_count)
+        self._print_summary_table(summary, sync_summary, hidden_count, status_filter)
 
     def _get_branch_display(self, status: RepositoryStatus) -> str:
         """Get branch name with color based on default branch."""
@@ -320,11 +353,12 @@ class OutputFormatter:
         summary: FleetSummary,
         sync_summary: SyncOperationSummary | None = None,
         hidden_count: int = 0,
+        status_filter: StatusFilter = StatusFilter(),
     ):
         """Print summary."""
         parts = [f"[bold]Total:[/] {summary.total}"]
         if hidden_count > 0:
-            parts.append(f"[dim]({hidden_count} hidden by --dirty)[/]")
+            parts.append(f"[dim]({hidden_count} hidden by {status_filter.flags})[/]")
 
         if summary.clean > 0:
             parts.append(f"[green]✓ Clean:[/] {summary.clean}")
@@ -714,26 +748,26 @@ class OutputFormatter:
         all_statuses: list[tuple[Path, list[RepositoryStatus]]],
         summary: FleetSummary,
         sync_summary: SyncOperationSummary | None = None,
-        dirty_only: bool = False,
+        status_filter: StatusFilter = StatusFilter(),
     ):
         """Print status list for multiple roots.
 
         Args:
-            dirty_only: When True, hide repositories that are clean AND in sync
-                from the rendered table. Ignored when use_json is True so machine
-                consumers always receive complete data.
+            status_filter: Hides non-matching repositories from the rendered table.
+                Ignored when use_json is True so machine consumers always receive
+                complete data.
         """
         if self.use_json:
             self._print_multi_root_status_json(all_statuses, summary)
         else:
-            self._print_multi_root_status_table(all_statuses, summary, sync_summary, dirty_only)
+            self._print_multi_root_status_table(all_statuses, summary, sync_summary, status_filter)
 
     def _print_multi_root_status_table(
         self,
         all_statuses: list[tuple[Path, list[RepositoryStatus]]],
         summary: FleetSummary,
         sync_summary: SyncOperationSummary | None = None,
-        dirty_only: bool = False,
+        status_filter: StatusFilter = StatusFilter(),
     ):
         """Print multi-root status table output."""
         # Flatten all statuses and compute unique display names
@@ -746,9 +780,7 @@ class OutputFormatter:
         root_names = compute_unique_root_names(roots)
 
         total_count = len(all_items)
-        visible_count = (
-            sum(1 for s in all_items if is_dirty_status(s)) if dirty_only else total_count
-        )
+        visible_count = sum(1 for s in all_items if status_filter.matches(s))
         hidden_count = total_count - visible_count
 
         root_count = len(all_statuses)
@@ -764,7 +796,7 @@ class OutputFormatter:
         for root, statuses in all_statuses:
             root_name = root_names.get(root, root.name)
             for status in statuses:
-                if dirty_only and not is_dirty_status(status):
+                if not status_filter.matches(status):
                     continue
 
                 sync_icon = self._get_sync_icon(status)
@@ -781,12 +813,12 @@ class OutputFormatter:
                     root_name, repo_display, branch_display, sync_icon, wt_status, last_commit
                 )
 
-        if dirty_only and visible_count == 0:
-            self.console.print(f"[green]All {total_count} repositories are clean and in sync.[/]")
+        if status_filter.active and visible_count == 0:
+            self.console.print(f"[green]{status_filter.empty_message(total_count)}[/]")
         else:
             self.console.print(table)
         self.console.print()
-        self._print_summary_table(summary, sync_summary, hidden_count=hidden_count)
+        self._print_summary_table(summary, sync_summary, hidden_count, status_filter)
 
     def _print_multi_root_status_json(
         self,
