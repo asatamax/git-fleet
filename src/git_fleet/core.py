@@ -7,7 +7,6 @@ pull, push, and sync operations across your entire development directory.
 
 from __future__ import annotations
 
-import json
 import os
 import subprocess
 from collections.abc import Callable
@@ -29,7 +28,14 @@ from rich.progress import (
 )
 
 from ._version import __version__
-from .formatters import OutputFormatter, StatusFilter, escape
+from .formatters import (
+    OutputFormatter,
+    StatusFilter,
+    done_label,
+    emit_json,
+    escape,
+    progress_label,
+)
 from .schema import get_tool_schema
 
 # =============================================================================
@@ -66,6 +72,9 @@ class PullMode(StrEnum):
 
 
 DEFAULT_MAX_WORKERS = 8
+# Never searched for repositories: git metadata, and dependency trees that can hold
+# thousands of vendored checkouts.
+_DISCOVERY_PRUNED_DIRS = frozenset({".git", "node_modules"})
 
 
 @dataclass
@@ -1283,10 +1292,13 @@ class FleetManager:
             return self._repositories
 
         repos = []
-        for git_dir in self.root_path.rglob(".git"):
-            if git_dir.is_dir():
-                repo_path = git_dir.parent
-                repos.append(GitRepository(repo_path))
+        # Pruned walk: rglob(".git") descended into every .git and node_modules tree.
+        # followlinks=False matches rglob, which never recurses through symlinked dirs;
+        # os.walk still lists a symlinked .git dir in dirnames, as rglob + is_dir() did.
+        for dirpath, dirnames, _ in os.walk(self.root_path, followlinks=False):
+            if ".git" in dirnames:
+                repos.append(GitRepository(Path(dirpath)))
+            dirnames[:] = [d for d in dirnames if d not in _DISCOVERY_PRUNED_DIRS]
 
         # Sort by path for consistent ordering
         repos.sort(key=lambda r: r.path)
@@ -1900,7 +1912,7 @@ def main(
 ):
     """git-fleet: Command multiple Git repositories like a fleet admiral."""
     if schema:
-        print(json.dumps(get_tool_schema(), indent=2))
+        emit_json(get_tool_schema())
         raise typer.Exit()
 
     # If no command and no schema, show help
@@ -1909,10 +1921,14 @@ def main(
         pass
 
 
-def get_console_and_formatter(json_output: bool) -> tuple[Console, OutputFormatter]:
+def get_console_and_formatter(
+    json_output: bool, dry_run: bool = False
+) -> tuple[Console, OutputFormatter]:
     """Create console and formatter."""
-    console = Console(force_terminal=not json_output)
-    formatter = OutputFormatter(console, use_json=json_output)
+    # With --json, stdout carries only the JSON document (emit_json); every
+    # diagnostic printed through this console goes to stderr instead.
+    console = Console(force_terminal=not json_output, stderr=json_output)
+    formatter = OutputFormatter(console, use_json=json_output, dry_run=dry_run)
     return console, formatter
 
 
@@ -2266,7 +2282,7 @@ def pull(
     and pulls them if changed files don't overlap. Use --safe to skip all
     conflict-risk repos, or --force to pull everything.
     """
-    console, formatter = get_console_and_formatter(json_output)
+    console, formatter = get_console_and_formatter(json_output, dry_run=dry_run)
 
     if force and safe:
         console.print("[red]Error: --force and --safe are mutually exclusive[/]")
@@ -2299,7 +2315,7 @@ def pull(
                 TextColumn("[progress.description]{task.description}"),
                 console=console,
             ) as progress:
-                progress.add_task("Pulling repositories...", total=None)
+                progress.add_task(f"{progress_label('pull', dry_run)}...", total=None)
                 all_results = multi_fleet.pull_all(
                     only_behind=not all_repos,
                     sequential=sequential,
@@ -2350,7 +2366,7 @@ def pull(
                 TextColumn("[progress.description]{task.description}"),
                 console=console,
             ) as progress:
-                progress.add_task("Pulling repositories...", total=None)
+                progress.add_task(f"{progress_label('pull', dry_run)}...", total=None)
                 results = fleet.pull_all(
                     only_behind=not all_repos,
                     sequential=sequential,
@@ -2416,7 +2432,7 @@ def push(
     ),
 ):
     """Push repositories that are ahead of remote."""
-    console, formatter = get_console_and_formatter(json_output)
+    console, formatter = get_console_and_formatter(json_output, dry_run=dry_run)
 
     resolved_roots = resolve_effective_roots(path, roots, console)
     if resolved_roots:
@@ -2438,7 +2454,7 @@ def push(
                 TextColumn("[progress.description]{task.description}"),
                 console=console,
             ) as progress:
-                progress.add_task("Pushing repositories...", total=None)
+                progress.add_task(f"{progress_label('push', dry_run)}...", total=None)
                 all_results = multi_fleet.push_all(
                     only_ahead=not all_repos,
                     sequential=sequential,
@@ -2467,7 +2483,7 @@ def push(
                 TextColumn("[progress.description]{task.description}"),
                 console=console,
             ) as progress:
-                progress.add_task("Pushing repositories...", total=None)
+                progress.add_task(f"{progress_label('push', dry_run)}...", total=None)
                 results = fleet.push_all(
                     only_ahead=not all_repos,
                     sequential=sequential,
@@ -2560,7 +2576,7 @@ def sync(
     ),
 ):
     """Sync all repositories: lightweight fetch, pull (smart), then push."""
-    console, formatter = get_console_and_formatter(json_output)
+    console, formatter = get_console_and_formatter(json_output, dry_run=dry_run)
     status_filter = StatusFilter(dirty=dirty_only, off_default=off_default)
 
     resolved_roots = resolve_effective_roots(path, roots, console)
@@ -2628,7 +2644,7 @@ def sync(
 
         # Step 2: Pull (smart) - reuse pre-fetched statuses
         if not json_output:
-            console.print("[bold]Step 2/4: Pulling repositories (smart)...[/]")
+            console.print(f"[bold]Step 2/4: {progress_label('pull', dry_run)} (smart)...[/]")
 
         pull_results = multi_fleet.pull_all(
             only_behind=True,
@@ -2642,7 +2658,7 @@ def sync(
             total = sum(len(results) for _, results in pull_results)
             if total > 0:
                 success = sum(sum(1 for r in results if r.success) for _, results in pull_results)
-                console.print(f"  Pulled {success}/{total} repositories")
+                console.print(f"  {done_label('pull', dry_run)} {success}/{total} repositories")
                 _print_success_bullets(
                     console,
                     [r for _, results in pull_results for r in results],
@@ -2677,7 +2693,7 @@ def sync(
 
         # Step 3: Push - reuse post-pull statuses
         if not json_output:
-            console.print("[bold]Step 3/4: Pushing repositories...[/]")
+            console.print(f"[bold]Step 3/4: {progress_label('push', dry_run)}...[/]")
 
         push_results = multi_fleet.push_all(
             only_ahead=True,
@@ -2691,7 +2707,7 @@ def sync(
             total = sum(len(results) for _, results in push_results)
             if total > 0:
                 success = sum(sum(1 for r in results if r.success) for _, results in push_results)
-                console.print(f"  Pushed {success}/{total} repositories")
+                console.print(f"  {done_label('push', dry_run)} {success}/{total} repositories")
                 _print_success_bullets(
                     console,
                     [r for _, results in push_results for r in results],
@@ -2753,7 +2769,7 @@ def sync(
                 "summary": summary.to_dict(),
                 "sync_operations": sync_summary.to_dict(),
             }
-            console.print(json.dumps(output, indent=2))
+            emit_json(output)
         return
 
     # Single root mode
@@ -2815,7 +2831,7 @@ def sync(
 
     # Step 2: Pull (smart) - reuse pre-fetched statuses
     if not json_output:
-        console.print("[bold]Step 2/4: Pulling repositories (smart)...[/]")
+        console.print(f"[bold]Step 2/4: {progress_label('pull', dry_run)} (smart)...[/]")
 
     pull_results = fleet.pull_all(
         only_behind=True,
@@ -2828,7 +2844,9 @@ def sync(
     if not json_output:
         if pull_results:
             success = sum(1 for r in pull_results if r.success)
-            console.print(f"  Pulled {success}/{len(pull_results)} repositories")
+            console.print(
+                f"  {done_label('pull', dry_run)} {success}/{len(pull_results)} repositories"
+            )
             _print_success_bullets(console, pull_results)
             failed = [r for r in pull_results if not r.success]
             if failed:
@@ -2856,7 +2874,7 @@ def sync(
 
     # Step 3: Push - reuse post-pull statuses
     if not json_output:
-        console.print("[bold]Step 3/4: Pushing repositories...[/]")
+        console.print(f"[bold]Step 3/4: {progress_label('push', dry_run)}...[/]")
 
     push_results = fleet.push_all(
         only_ahead=True,
@@ -2869,7 +2887,9 @@ def sync(
     if not json_output:
         if push_results:
             success = sum(1 for r in push_results if r.success)
-            console.print(f"  Pushed {success}/{len(push_results)} repositories")
+            console.print(
+                f"  {done_label('push', dry_run)} {success}/{len(push_results)} repositories"
+            )
             _print_success_bullets(console, push_results)
             failed = [r for r in push_results if not r.success]
             if failed:
@@ -2912,7 +2932,7 @@ def sync(
             "summary": summary.to_dict(),
             "sync_operations": sync_summary.to_dict(),
         }
-        console.print(json.dumps(output, indent=2))
+        emit_json(output)
 
 
 @app.command(name="list")
@@ -2931,7 +2951,7 @@ def list_repos(
         False,
         "--paths",
         "-p",
-        help="Output only paths (one per line, for piping to fzf etc.)",
+        help="Output only paths (one per line, for piping to fzf etc.); ignored with --json",
     ),
     show_remote: bool = typer.Option(
         False,
@@ -2959,7 +2979,7 @@ def list_repos(
         multi_fleet = MultiRootFleetManager(root_paths)
         all_repos = multi_fleet.discover_all_repositories()
 
-        if paths_only:
+        if paths_only and not json_output:
             for _, repos in all_repos:
                 for repo in repos:
                     print(repo.path)
@@ -2974,7 +2994,7 @@ def list_repos(
         fleet = FleetManager(target_path)
         repos = fleet.discover_repositories()
 
-        if paths_only:
+        if paths_only and not json_output:
             for repo in repos:
                 print(repo.path)
         elif show_remote:

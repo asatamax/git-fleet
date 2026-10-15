@@ -34,6 +34,34 @@ def escape(text: str) -> str:
     return text.replace("[", "\\[")
 
 
+def emit_json(data: Any) -> None:
+    """Write data as JSON verbatim to stdout.
+
+    console.print would soft-wrap long values and parse "[...]" as markup. A fresh
+    stdout console is used because in JSON mode the formatter's console is stderr.
+    """
+    Console(force_terminal=False).out(json.dumps(data, indent=2, default=str), highlight=False)
+
+
+_OPERATION_WORDS = {
+    # operation: (done, would-do, in progress, previewing)
+    "pull": ("Pulled", "Would pull", "Pulling repositories", "Checking what would be pulled"),
+    "push": ("Pushed", "Would push", "Pushing repositories", "Checking what would be pushed"),
+}
+
+
+def done_label(operation: str, dry_run: bool) -> str:
+    """'Pulled' / 'Would pull': a dry run must never claim it changed anything."""
+    done, would, _, _ = _OPERATION_WORDS[operation]
+    return would if dry_run else done
+
+
+def progress_label(operation: str, dry_run: bool) -> str:
+    """'Pulling repositories' / 'Checking what would be pulled'."""
+    _, _, doing, previewing = _OPERATION_WORDS[operation]
+    return previewing if dry_run else doing
+
+
 def _plural(count: int, singular: str, plural: str | None = None) -> str:
     return f"{count} {singular if count == 1 else plural or singular + 's'}"
 
@@ -207,9 +235,10 @@ def _make_paths_unique(paths: list[Path]) -> list[str]:
 class OutputFormatter:
     """Format output for console or JSON."""
 
-    def __init__(self, console: Console, use_json: bool = False):
+    def __init__(self, console: Console, use_json: bool = False, dry_run: bool = False):
         self.console = console
         self.use_json = use_json
+        self.dry_run = dry_run
 
     def print_status_list(
         self,
@@ -391,6 +420,8 @@ class OutputFormatter:
 
         # Print sync operation summary if provided
         if sync_summary:
+            pulled = done_label("pull", self.dry_run)
+            pushed = done_label("push", self.dry_run)
             sync_parts = []
             if sync_summary.fetched > 0 or sync_summary.fetched_failed > 0:
                 if sync_summary.fetched_failed > 0:
@@ -403,21 +434,22 @@ class OutputFormatter:
             if sync_summary.pulled > 0 or sync_summary.pulled_failed > 0:
                 if sync_summary.pulled_failed > 0:
                     sync_parts.append(
-                        f"[blue]Pulled:[/] {sync_summary.pulled}"
+                        f"[blue]{pulled}:[/] {sync_summary.pulled}"
                         f" [red]({sync_summary.pulled_failed} failed)[/]"
                     )
                 else:
-                    sync_parts.append(f"[blue]Pulled:[/] {sync_summary.pulled}")
+                    sync_parts.append(f"[blue]{pulled}:[/] {sync_summary.pulled}")
             if sync_summary.pushed > 0 or sync_summary.pushed_failed > 0:
                 if sync_summary.pushed_failed > 0:
                     sync_parts.append(
-                        f"[yellow]Pushed:[/] {sync_summary.pushed}"
+                        f"[yellow]{pushed}:[/] {sync_summary.pushed}"
                         f" [red]({sync_summary.pushed_failed} failed)[/]"
                     )
                 else:
-                    sync_parts.append(f"[yellow]Pushed:[/] {sync_summary.pushed}")
+                    sync_parts.append(f"[yellow]{pushed}:[/] {sync_summary.pushed}")
             if sync_parts:
-                self.console.print("[bold]Synced:[/] " + " | ".join(sync_parts))
+                heading = "Dry run" if self.dry_run else "Synced"
+                self.console.print(f"[bold]{heading}:[/] " + " | ".join(sync_parts))
 
     def _print_status_json(self, statuses: list[RepositoryStatus], summary: FleetSummary):
         """Print JSON output."""
@@ -425,7 +457,7 @@ class OutputFormatter:
             "repositories": [s.to_dict() for s in statuses],
             "summary": summary.to_dict(),
         }
-        self.console.print(json.dumps(output, indent=2, default=str))
+        emit_json(output)
 
     def print_operation_results(self, results: list[OperationResult], operation: str):
         """Print operation results."""
@@ -443,7 +475,7 @@ class OutputFormatter:
         # Compute unique display names for duplicate repo names
         display_names = compute_unique_display_names(results)
 
-        table = Table(title=f"{operation.title()} Results")
+        table = Table(title=self._operation_table_title(operation))
         table.add_column("Repository", style="cyan")
         table.add_column("Status", justify="center")
         table.add_column("Message")
@@ -468,10 +500,20 @@ class OutputFormatter:
             table.add_row(repo_display, status, message)
 
         self.console.print(table)
-        parts = [f"Success: {success_count}/{len(results)}"]
+        parts = [self._operation_tally(operation, success_count, len(results))]
         if warned_count:
             parts.append(f"[yellow]Warnings: {warned_count}[/]")
         self.console.print(f"\n[bold]{' | '.join(parts)}[/]")
+
+    def _operation_table_title(self, operation: str) -> str:
+        if self.dry_run:
+            return f"{operation.title()} Preview (dry-run)"
+        return f"{operation.title()} Results"
+
+    def _operation_tally(self, operation: str, success: int, total: int) -> str:
+        if self.dry_run and operation in _OPERATION_WORDS:
+            return f"{done_label(operation, True)}: {success}/{total}"
+        return f"Success: {success}/{total}"
 
     def _print_operation_json(self, results: list[OperationResult]):
         """Print operation results as JSON."""
@@ -487,7 +529,7 @@ class OutputFormatter:
             "results": [r.to_dict() for r in results],
             "summary": summary,
         }
-        self.console.print(json.dumps(output, indent=2))
+        emit_json(output)
 
     def print_repo_list(self, repos: list[GitRepository], root_path: Path):
         """Print simple repository list."""
@@ -506,7 +548,7 @@ class OutputFormatter:
                     for r in repos
                 ],
             }
-            self.console.print(json.dumps(output, indent=2))
+            emit_json(output)
         else:
             # Compute unique display names for duplicate repo names
             display_names = compute_unique_display_names(repos)
@@ -620,7 +662,7 @@ class OutputFormatter:
                 "local_override": sum(1 for i in identities if i.is_local_override),
             },
         }
-        self.console.print(json.dumps(output, indent=2))
+        emit_json(output)
 
     def print_multi_root_identity_list(
         self,
@@ -753,7 +795,7 @@ class OutputFormatter:
                 "local_override": local_override,
             },
         }
-        self.console.print(json.dumps(output, indent=2))
+        emit_json(output)
 
     def print_multi_root_status_list(
         self,
@@ -856,7 +898,7 @@ class OutputFormatter:
             "roots": roots_data,
             "summary": summary.to_dict(),
         }
-        self.console.print(json.dumps(output, indent=2, default=str))
+        emit_json(output)
 
     def print_multi_root_repo_list(
         self,
@@ -894,7 +936,7 @@ class OutputFormatter:
                 "roots": roots_data,
                 "total": total,
             }
-            self.console.print(json.dumps(output, indent=2))
+            emit_json(output)
         else:
             total = sum(len(repos) for _, repos in all_repos)
             self.console.print(f"[bold]Found {total} repositories in {len(all_repos)} roots[/]\n")
@@ -945,7 +987,7 @@ class OutputFormatter:
                 "roots": roots_data,
                 "summary": summary,
             }
-            self.console.print(json.dumps(output, indent=2))
+            emit_json(output)
         else:
             total = 0
             success_count = 0
@@ -965,7 +1007,7 @@ class OutputFormatter:
                 self.console.print(f"[dim]No repositories to {operation}[/]")
                 return
 
-            table = Table(title=f"{operation.title()} Results")
+            table = Table(title=self._operation_table_title(operation))
             table.add_column("Root", style="yellow")
             table.add_column("Repository", style="cyan")
             table.add_column("Status", justify="center")
@@ -987,7 +1029,7 @@ class OutputFormatter:
                 table.add_row(root_name, repo_display, status, message)
 
             self.console.print(table)
-            parts = [f"Success: {success_count}/{total}"]
+            parts = [self._operation_tally(operation, success_count, total)]
             if warned_count:
                 parts.append(f"[yellow]Warnings: {warned_count}[/]")
             self.console.print(f"\n[bold]{' | '.join(parts)}[/]")
@@ -1092,7 +1134,7 @@ class OutputFormatter:
                 "by_protocol": protocol_counts,
             },
         }
-        self.console.print(json.dumps(output, indent=2))
+        emit_json(output)
 
     def print_multi_root_remote_list(
         self,
@@ -1213,7 +1255,7 @@ class OutputFormatter:
                 "by_protocol": protocol_counts,
             },
         }
-        self.console.print(json.dumps(output, indent=2))
+        emit_json(output)
 
     def print_repo_list_with_remotes(
         self,
@@ -1296,7 +1338,7 @@ class OutputFormatter:
                 for r in repos
             ],
         }
-        self.console.print(json.dumps(output, indent=2))
+        emit_json(output)
 
     def print_multi_root_repo_list_with_remotes(
         self,
@@ -1409,7 +1451,7 @@ class OutputFormatter:
             "roots": roots_data,
             "total": total,
         }
-        self.console.print(json.dumps(output, indent=2))
+        emit_json(output)
 
     # -----------------------------------------------------------------
     # Diff output
@@ -1480,7 +1522,7 @@ class OutputFormatter:
             "repositories": [d.to_dict() for d in diffs],
             "summary": self._build_diff_summary_dict(diffs, total_repos),
         }
-        self.console.print(json.dumps(output, indent=2))
+        emit_json(output)
 
     def print_multi_root_diff_list(
         self,
@@ -1572,7 +1614,7 @@ class OutputFormatter:
             "roots": roots_data,
             "summary": self._build_diff_summary_dict(all_items, total_repos),
         }
-        self.console.print(json.dumps(output, indent=2))
+        emit_json(output)
 
     def _print_diff_summary(self, diffs: list[RepositoryDiff], total_repos: int):
         """Print diff summary line."""
@@ -1648,8 +1690,7 @@ class OutputFormatter:
                     "repositories": [r.to_dict() for r in all_items],
                     "summary": summary.to_dict(),
                 }
-            # console.print would word-wrap long values and parse "[...]" as markup.
-            self.console.out(json.dumps(output, indent=2, default=str), highlight=False)
+            emit_json(output)
             return
 
         display_names = compute_unique_display_names(all_items)

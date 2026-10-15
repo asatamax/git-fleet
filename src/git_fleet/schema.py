@@ -10,7 +10,7 @@ def get_tool_schema() -> dict:
     return {
         "name": "git-fleet",
         "version": __version__,
-        "description": "Command multiple Git repositories like a fleet admiral. Manage, monitor, and synchronize all Git repositories under a directory tree with parallel execution. Supports multi-root configuration with auto-resolution (env var, XDG, legacy) or explicit --roots option; an explicit path argument overrides auto-resolution (see resolutionPrecedence).",
+        "description": "Command multiple Git repositories like a fleet admiral. Manage, monitor, and synchronize all Git repositories under a directory tree with parallel execution. Discovery does not descend into .git or node_modules directories (repositories inside node_modules are not listed). Supports multi-root configuration with auto-resolution (env var, XDG, legacy) or explicit --roots option; an explicit path argument overrides auto-resolution (see resolutionPrecedence).",
         "usage": "git-fleet <command> [path] [options]",
         "tools": [
             {
@@ -639,7 +639,7 @@ def get_tool_schema() -> dict:
                         },
                         "paths": {
                             "type": "boolean",
-                            "description": "Output only paths (one per line, for piping to fzf etc.)",
+                            "description": "Output only paths (one per line, for piping to fzf etc.); ignored when json is set (json takes precedence)",
                             "default": False,
                         },
                         "remote": {

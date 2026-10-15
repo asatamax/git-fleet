@@ -155,6 +155,7 @@ git-fleet status
 ## Features
 
 - **Parallel execution**: Operations run in parallel by default for speed
+- **Fast discovery**: Repository search never descends into `.git` or `node_modules` directories, so repos inside `node_modules` are not listed
 - **Fast routine sync**: `sync` fetches each repo's upstream/origin remote by default; use `--all-remotes --prune` for full remote maintenance
 - **Safety checks**: Pull skips diverged or dirty repositories unless `--force`
 - **Identity verification**: `who` command shows Git user.name/email configuration
